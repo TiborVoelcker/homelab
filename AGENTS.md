@@ -114,6 +114,7 @@ be bootable.
 | `modules/01-create-baseline.sh` | Captures the baseline onto `p3`/`p4`, once; writes `autoboot.txt`. |
 | `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. |
 | `modules/03-upgrade.sh` | `apt-get update && upgrade`. |
+| `modules/04-journal.sh` | Keeps the journal on disk. RPi OS defaults it to RAM, so a power cut erases the logs explaining the power cut. Capped at 200M. |
 | `modules/10-cgroups.sh` | Puts `cgroup_enable=memory` on the kernel cmdline, so containers can be given memory limits. Takes effect at the next reboot. |
 | `modules/11-docker.sh` | Docker Engine + Compose plugin from Debian's repos. |
 | `modules/12-claude-code.sh` | Claude Code, installed into `$SUDO_USER`'s home. |

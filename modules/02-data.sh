@@ -11,6 +11,12 @@
 #   marker file       -> catches "mounted, but it is the wrong disk"
 #   udev + Upholds=   -> remounts the disk and restarts Docker on its own if
 #                        the disk ever drops out and comes back
+#
+# The mount also asks for errors=remount-ro. ext4 otherwise defaults to
+# "Continue" - log an I/O error and keep taking writes - so a disk returning
+# bad data can go on corrupting itself quietly. This does nothing for the
+# common case here, a disk that drops off USB entirely (ext4 shuts the
+# filesystem down on its own then), but it costs one mount option.
 set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
 
@@ -60,7 +66,7 @@ else
     fi
 
     # UUID, never /dev/sdX - device letters shift with enumeration order.
-    printf 'UUID=%s %s ext4 defaults,noatime,nofail,x-systemd.device-timeout=30 0 2\n' \
+    printf 'UUID=%s %s ext4 defaults,noatime,nofail,errors=remount-ro,x-systemd.device-timeout=30 0 2\n' \
         "$data_uuid" "$DATA_DIR" >> /etc/fstab
 
     systemctl daemon-reload

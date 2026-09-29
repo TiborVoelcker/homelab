@@ -119,6 +119,7 @@ be bootable.
 | `modules/20-paperless.sh` | Paperless-ngx, and the template the other service modules follow. |
 | `modules/21-home-assistant.sh` | Home Assistant Container - host networking, config on `/data`. |
 | `modules/22-otbr.sh` | OpenThread Border Router. Needs a Thread radio on USB; skips when none is plugged in. |
+| `modules/23-matter-server.sh` | python-matter-server - lets Home Assistant commission Matter (incl. Matter-over-Thread) devices. |
 | `bin/homelab-reset` | Arms the reset and triggers a tryboot. |
 | `bin/homelab-status` | Read-only snapshot: role, tryboot, partitions, `/data`, baseline age, armed? |
 | `reset/reset-main.sh` | Installed into the baseline as `/usr/local/sbin/homelab-reset-main`. Overwrites `p1`/`p2` with itself, behind three gates. |

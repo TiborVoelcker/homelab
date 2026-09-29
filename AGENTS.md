@@ -112,7 +112,7 @@ be bootable.
 | `lib/common.sh` | Sourced by everything, including `reset-main.sh` inside the baseline. Output helpers, guards, layout constants, copy primitives. |
 | `modules/00-storage.sh` | Carves `p3`/`p4` out of unallocated space. |
 | `modules/01-create-baseline.sh` | Captures the baseline onto `p3`/`p4`, once; writes `autoboot.txt`. |
-| `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted. |
+| `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. |
 | `modules/03-upgrade.sh` | `apt-get update && upgrade`. |
 | `modules/11-docker.sh` | Docker Engine + Compose plugin from Debian's repos. |
 | `modules/12-claude-code.sh` | Claude Code, installed into `$SUDO_USER`'s home. |
@@ -164,6 +164,12 @@ Everything above is implemented, and the full cycle - install, reset, reinstall
 
 - New service modules follow `20-paperless.sh`: state on `/data`, everything
   else treated as disposable by a reset.
+- A module that runs a service outside Docker (not the `20-paperless.sh`
+  pattern) and needs `/data` present to start must add its unit to the
+  `Upholds=docker.service` line in `modules/02-data.sh`, or it won't come
+  back on its own after a transient USB drop of the data disk. Docker-based
+  modules don't need this - Docker restarts its own containers once it's
+  back up.
 - Never regenerate a secret that already exists on disk - that orphans whatever
   data was encrypted or keyed with the old one.
 - Keep the baseline minimal. Every addition is a way a reset system can

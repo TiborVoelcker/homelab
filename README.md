@@ -191,3 +191,6 @@ Copy `modules/20-paperless.sh`:
 
 Most install instructions paste in nearly verbatim. Only lines that would be
 destructive to repeat need a guard.
+
+Not a Docker container? Add its unit to the `Upholds=` line in
+`modules/02-data.sh` too, or it won't come back after a `/data` drop.

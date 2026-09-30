@@ -21,7 +21,7 @@ set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
 
 need_root
-need_cmd lsblk blkid findmnt sfdisk systemd-escape
+need_cmd lsblk blkid findmnt sfdisk systemd-escape tune2fs
 detect_disk
 
 mkdir -p "$DATA_DIR"
@@ -80,6 +80,26 @@ data_uuid=$(findmnt -no UUID "$DATA_DIR")
 mount_unit=$(systemd-escape --path --suffix=mount "$DATA_DIR")
 
 [[ -f "$DATA_MARKER" ]] || { touch "$DATA_MARKER"; ok "wrote data marker"; }
+
+# ---------- force a real check at every mount ----------
+# systemd-fsck runs `e2fsck -a` (preen), and preen SKIPS the check entirely on
+# a filesystem marked clean. A filesystem is marked clean whenever its journal
+# replayed, which says nothing about whether its metadata is consistent - so
+# corruption left behind by an unclean USB drop sails straight through the boot
+# check and only detonates later, in use. That is exactly what happened here
+# once: the disk dropped, came back, mounted "clean", and the damage surfaced
+# 40 seconds into the next boot.
+#
+# Maximum mount count 1 makes ext4 demand a real check every time instead. It
+# costs about a second, because fsck scales with the metadata in use (~130MB)
+# rather than with the size of the partition.
+data_dev=$(findmnt -no SOURCE "$DATA_DIR")
+if [[ "$(tune2fs -l "$data_dev" | sed -n 's/^Maximum mount count:[[:space:]]*//p')" == "1" ]]; then
+    skip "$DATA_DIR already forces a check at every mount"
+else
+    tune2fs -c 1 "$data_dev" >/dev/null
+    ok "$DATA_DIR will be checked at every mount"
+fi
 
 # ---------- make Docker depend on the mount ----------
 DROPIN=/etc/systemd/system/docker.service.d/10-homelab-data.conf

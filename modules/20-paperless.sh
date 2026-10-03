@@ -34,5 +34,31 @@ EOF
     ok "generated env file"
 fi
 
+# Memory caps, as a compose override rather than an edit to the file above:
+# that one comes from upstream and is fetched once, so editing it would be
+# undone by a re-fetch and would conflict on upstream changes. Compose merges
+# docker-compose.override.yml automatically. Written every run, because unlike
+# the upstream file this one is ours and re-writing it is how an edit here
+# reaches the Pi.
+#
+# Paperless is the greediest service on a 2GB Pi: OCR on a large scan can
+# balloon the webserver container well past its idle ~200MB. Without a cap the
+# kernel's OOM killer picks a victim by its own heuristics when memory runs
+# out, and Home Assistant - large and long-lived - is an attractive target. A
+# cap means a runaway OCR job dies instead of taking the house automation with
+# it. 768M leaves normal OCR plenty of room while still bounding the worst
+# case; the broker is a small key-value store and never needs much.
+#
+# This is only enforceable because modules/10-cgroups.sh turned on the memory
+# controller - without it Docker ignores these silently.
+cat > "$APP_DIR/docker-compose.override.yml" <<EOF
+services:
+  webserver:
+    mem_limit: 768m
+  broker:
+    mem_limit: 128m
+EOF
+ok "wrote memory caps override"
+
 cd "$APP_DIR" && docker compose up -d
 ok "paperless converged"

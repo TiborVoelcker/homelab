@@ -115,6 +115,7 @@ be bootable.
 | `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. |
 | `modules/03-upgrade.sh` | `apt-get update && upgrade`. |
 | `modules/04-journal.sh` | Keeps the journal on disk. RPi OS defaults it to RAM, so a power cut erases the logs explaining the power cut. Capped at 200M. |
+| `modules/05-arp.sh` | Stops ARP flux on this dual-homed host: each NIC answers only for its own address. Matters because the Pi is dialled into by address. |
 | `modules/06-mdns.sh` | Masks avahi. The Pi is named by the router's DNS (`raspberrypi.fritz.box`) instead of mDNS `.local`; containers keep their own mDNS. |
 | `modules/10-cgroups.sh` | Puts `cgroup_enable=memory` on the kernel cmdline, so containers can be given memory limits. Takes effect at the next reboot. |
 | `modules/11-docker.sh` | Docker Engine + Compose plugin from Debian's repos. |

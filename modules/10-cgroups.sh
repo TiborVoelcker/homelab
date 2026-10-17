@@ -35,24 +35,10 @@ CMDLINE="$BOOT_DIR/cmdline.txt"
 # cgroup_enable=memory is what cgroup v2 reads; cgroup_memory=1 is the older
 # v1 spelling. Both are set because they are harmless together and every
 # Raspberry Pi guide pairs them, so a future reader finds what they expect.
-PARAMS=(cgroup_enable=memory cgroup_memory=1)
-
-# The firmware reads only the FIRST line of cmdline.txt, and every parameter
-# has to stay on it - a stray newline silently drops everything after it.
-read -r cmdline < "$CMDLINE"
-
-missing=()
-for p in "${PARAMS[@]}"; do
-    # Padded compare, so a parameter is matched as a whole token rather than
-    # as a substring of a longer one.
-    [[ " $cmdline " == *" $p "* ]] || missing+=("$p")
-done
-
-if [[ ${#missing[@]} -eq 0 ]]; then
-    skip "memory cgroup already on the kernel cmdline"
+if added=$(add_cmdline_params "$CMDLINE" cgroup_enable=memory cgroup_memory=1); then
+    ok "added $added to cmdline.txt"
 else
-    printf '%s %s\n' "$cmdline" "${missing[*]}" > "$CMDLINE"
-    ok "added ${missing[*]} to cmdline.txt"
+    skip "memory cgroup already on the kernel cmdline"
 fi
 
 # Whether it is actually in effect is a property of the running kernel, not of

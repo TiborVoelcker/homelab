@@ -179,6 +179,26 @@ human_age() {
 # which point a reset leaves a system install.sh cannot build on.
 BASELINE_STALE_DAYS=730
 
+# Append kernel parameters to a boot partition's cmdline.txt, skipping any
+# already there. Prints the parameters it added and returns 1 when there was
+# nothing to add, so a caller can tell ok from skip.
+#
+# The firmware reads only the FIRST line of cmdline.txt, and every parameter
+# has to stay on it - a stray newline silently drops everything after it.
+add_cmdline_params() {
+    local cmdline="$1"; shift
+    local line p missing=()
+    read -r line < "$cmdline"
+    for p in "$@"; do
+        # Padded compare, so a parameter is matched as a whole token rather
+        # than as a substring of a longer one.
+        [[ " $line " == *" $p "* ]] || missing+=("$p")
+    done
+    (( ${#missing[@]} )) || return 1
+    printf '%s %s\n' "$line" "${missing[*]}" > "$cmdline"
+    printf '%s\n' "${missing[*]}"
+}
+
 # Point a boot partition's cmdline.txt at a given root partition.
 set_cmdline_root() {
     local cmdline="$1" rootn="$2"

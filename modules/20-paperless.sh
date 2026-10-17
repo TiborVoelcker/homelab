@@ -13,6 +13,11 @@ DATA=/data/paperless
 
 mkdir -p "$APP_DIR" "$DATA"/{data,media,export,consume}
 
+# The paperless image runs as uid/gid 1000, and these are bind-mounted into it
+# below. Left root-owned they mount read-only from the container's point of
+# view and paperless fails on its first write.
+chown 1000:1000 "$DATA"/{data,media,export,consume}
+
 if [[ -f "$APP_DIR/docker-compose.yml" ]]; then
     skip "compose file present"
 else
@@ -51,14 +56,34 @@ fi
 #
 # This is only enforceable because modules/10-cgroups.sh turned on the memory
 # controller - without it Docker ignores these silently.
+# The override also carries the volume paths, and that part is not a tuning
+# choice - it is what makes the first line of this file's header true.
+#
+# Upstream's compose declares `data:` and `media:` as *named volumes*, which
+# Docker places under /var/lib/docker/volumes on the SD card, and binds
+# `./export` and `./consume` relative to this directory, i.e. also the SD card.
+# A reset wipes both. So without these four lines the directories created above
+# stay empty, every scanned document lives on the disposable half of this
+# machine, and `homelab-reset` destroys the library. Compose merges volumes by
+# target path rather than appending, so naming the same four targets here
+# replaces the upstream mounts outright - check with `docker compose config`.
+#
+# The broker keeps its named volume on purpose: it is a Celery task queue, not
+# state worth preserving, and losing it on a reset costs nothing but a few
+# queued jobs.
 cat > "$APP_DIR/docker-compose.override.yml" <<EOF
 services:
   webserver:
     mem_limit: 768m
+    volumes:
+      - $DATA/data:/usr/src/paperless/data
+      - $DATA/media:/usr/src/paperless/media
+      - $DATA/export:/usr/src/paperless/export
+      - $DATA/consume:/usr/src/paperless/consume
   broker:
     mem_limit: 128m
 EOF
-ok "wrote memory caps override"
+ok "wrote memory caps and data paths override"
 
 cd "$APP_DIR" && docker compose up -d
 ok "paperless converged"

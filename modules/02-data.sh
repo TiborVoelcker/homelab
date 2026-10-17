@@ -9,6 +9,7 @@
 #   nofail            -> the Pi still boots without the disk, so you can SSH in
 #   RequiresMountsFor -> Docker will not start until /data is genuinely mounted
 #   marker file       -> catches "mounted, but it is the wrong disk"
+#                        (and Docker also refuses a read-only /data)
 #   udev + Upholds=   -> remounts the disk and restarts Docker on its own if
 #                        the disk ever drops out and comes back
 #
@@ -102,20 +103,26 @@ else
 fi
 
 # ---------- make Docker depend on the mount ----------
+# The rw check matters because a read-only /data is still a mounted /data:
+# without it, Upholds= below would restart Docker straight after Monit stopped
+# it (see bin/homelab-check data), and the containers would crash-loop again.
 DROPIN=/etc/systemd/system/docker.service.d/10-homelab-data.conf
-if [[ -f "$DROPIN" ]]; then
-    skip "docker mount dependency present"
-else
-    mkdir -p "$(dirname "$DROPIN")"
-    cat > "$DROPIN" <<EOF
+dropin=$(cat <<EOF
 [Unit]
 RequiresMountsFor=$DATA_DIR
 
 [Service]
 ExecStartPre=/usr/bin/test -f $DATA_MARKER
+ExecStartPre=/usr/bin/findmnt -O rw $DATA_DIR
 EOF
+)
+if [[ "$(cat "$DROPIN" 2>/dev/null)" == "$dropin" ]]; then
+    skip "docker mount dependency present"
+else
+    mkdir -p "$(dirname "$DROPIN")"
+    printf '%s\n' "$dropin" > "$DROPIN"
     systemctl daemon-reload
-    ok "docker will not start unless $DATA_DIR is mounted and verified"
+    ok "docker will not start unless $DATA_DIR is mounted, verified and writable"
 fi
 
 # ---------- recover on our own if the disk drops off USB ----------

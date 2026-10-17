@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Push a notification to the phone via ntfy.
+#   homelab-notify "title" "message"
+# Monit calls it with no arguments and passes the event in MONIT_* variables.
+set -euo pipefail
+source /etc/homelab/notify.env
+
+title="${1:-${MONIT_SERVICE:-homelab}: ${MONIT_EVENT:-}}"
+msg="${2:-${MONIT_DESCRIPTION:-}}"
+
+curl -fsS -m 10 --retry 3 -o /dev/null \
+    -H "Title: $(hostname) - $title" -d "$msg" "$NTFY_URL"

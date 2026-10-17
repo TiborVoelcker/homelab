@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Checks run by Monit (modules/13-monit.sh). Exit 0 = fine, 1 = problem; the
+# output becomes the notification text.
+set -euo pipefail
+DATA_DIR=/data
+
+case "${1:-}" in
+data)
+    # A read-only /data makes containers crash-loop, and every container start
+    # leaks a little kernel memory: ~6000 restarts once added up to ~570MB and
+    # got the Pi OOM-killed for days. Stopping Docker ends the loop; the
+    # drop-in from 02-data.sh stops Upholds= from starting it again until
+    # /data is read-write.
+    if findmnt -O rw "$DATA_DIR" >/dev/null; then
+        echo "$DATA_DIR is mounted read-write"
+        exit 0
+    fi
+    if systemctl is-active -q docker; then
+        systemctl stop docker.socket docker.service
+        echo "$DATA_DIR is not writable - stopped Docker. Repair with fsck and remount; Docker then comes back on its own."
+    else
+        echo "$DATA_DIR is not writable"
+    fi
+    exit 1
+    ;;
+restarts)
+    # unless-stopped retries forever. Five starts of one container within ten
+    # minutes is a crash loop: stop it. A manual stop also sticks across
+    # reboots, so it stays down until someone looks.
+    looping=$(journalctl _PID=1 --since -10min -o cat \
+        | { grep -oP '^Started docker-\K[0-9a-f]{64}(?=\.scope)' || true; } \
+        | sort | uniq -c | awk '$1 >= 5 { print $2 }')
+    found=0
+    for id in $looping; do
+        # Gone already (removed by hand): nothing left to stop.
+        name=$(docker inspect -f '{{.Name}}' "$id" 2>/dev/null) || continue
+        docker stop "$id" >/dev/null
+        echo "${name#/} was crash-looping - stopped it, start it again by hand once fixed"
+        found=1
+    done
+    (( found )) || echo "no crash loops"
+    (( ! found ))
+    ;;
+kmem)
+    # Unreclaimable kernel memory, hidden inside "used" everywhere else.
+    # Normally ~40MB; the crash-loop leak above is what drives it up.
+    kb=$(awk '/^SUnreclaim:/ { print $2 }' /proc/meminfo)
+    echo "unreclaimable kernel memory: $(( kb / 1024 ))MB"
+    (( kb < 200 * 1024 ))
+    ;;
+temp)
+    # The Pi starts throttling at 80°C.
+    t=$(( $(cat /sys/class/thermal/thermal_zone0/temp) / 1000 ))
+    echo "CPU temperature: ${t}°C"
+    (( t < 75 ))
+    ;;
+docker)
+    if systemctl is-active -q docker; then
+        echo "docker is running"
+        exit 0
+    fi
+    echo "docker is not running"
+    exit 1
+    ;;
+*)
+    echo "usage: homelab-check data|restarts|kmem|temp|docker" >&2
+    exit 2
+    ;;
+esac

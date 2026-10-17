@@ -50,6 +50,8 @@ check program restarts with path "/usr/local/sbin/homelab-check restarts"
     if status != 0 then $NOTIFY else if succeeded then $NOTIFY
 check program docker with path "/usr/local/sbin/homelab-check docker"
     if status != 0 for 2 cycles then $NOTIFY else if succeeded then $NOTIFY
+check program unhealthy with path "/usr/local/sbin/homelab-check unhealthy"
+    if status != 0 for 3 cycles then $NOTIFY else if succeeded then $NOTIFY
 check program kmem with path "/usr/local/sbin/homelab-check kmem"
     if status != 0 then $NOTIFY else if succeeded then $NOTIFY
 check program temp with path "/usr/local/sbin/homelab-check temp"

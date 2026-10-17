@@ -36,6 +36,20 @@ services:
     volumes:
       - $DATA:/data
       - /run/dbus:/run/dbus:ro
+    # Docker only knows a container is up, not that the service inside it
+    # works. otbr-agent crash-looped for 18 days behind its image's own
+    # supervisor while the container reported "Up" and Monit's restart check,
+    # which watches container starts, saw nothing. A healthcheck is what makes
+    # that visible, and the unhealthy check in homelab-check is what reports
+    # it. Mind the backticks: this block is inside an unquoted heredoc.
+    # /info is the server's own status endpoint, so this proves the websocket
+    # server is serving rather than merely that the port is open.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "-o", "/dev/null", "http://127.0.0.1:5580/info"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 EOF
 ok "wrote compose file"
 

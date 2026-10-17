@@ -37,6 +37,21 @@ services:
       - /etc/localtime:/etc/localtime:ro
     environment:
       TZ: Europe/Berlin
+    # Docker only knows a container is up, not that the service inside it
+    # works. otbr-agent crash-looped for 18 days behind its image's own
+    # supervisor while the container reported "Up" and Monit's restart check,
+    # which watches container starts, saw nothing. A healthcheck is what makes
+    # that visible, and the unhealthy check in homelab-check is what reports
+    # it. Mind the backticks: this block is inside an unquoted heredoc.
+    # A cold start on this Pi takes a minute or two - recorder alone logs that
+    # it is taking over 10 seconds - so the start period is generous. Until it
+    # expires the state is "starting", which deliberately alerts no one.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "-o", "/dev/null", "http://127.0.0.1:8123/"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
 EOF
 ok "wrote compose file"
 

@@ -109,7 +109,7 @@ be bootable.
 | Path | Role |
 | --- | --- |
 | `install.sh` | Entry point: symlinks `bin/` into `/usr/local/sbin`, then runs `modules/*.sh` in order. |
-| `lib/common.sh` | Sourced by everything, including `reset-main.sh` inside the baseline. Output helpers, guards, layout constants, copy primitives. |
+| `lib/common.sh` | Sourced by everything, including `reset-main.sh` inside the baseline. Output helpers, guards, layout constants, copy and cmdline primitives. |
 | `modules/00-storage.sh` | Carves `p3`/`p4` out of unallocated space. |
 | `modules/01-create-baseline.sh` | Captures the baseline onto `p3`/`p4`, once; writes `autoboot.txt`. |
 | `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted and writable; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. |
@@ -122,7 +122,7 @@ be bootable.
 | `modules/10-cgroups.sh` | Puts `cgroup_enable=memory` on the kernel cmdline, so containers can be given memory limits. Takes effect at the next reboot. |
 | `modules/11-docker.sh` | Docker Engine + Compose plugin from Debian's repos. Owns `/etc/docker/daemon.json`, which caps every container's log at 10MB x 3. |
 | `modules/12-claude-code.sh` | Claude Code, installed into `$SUDO_USER`'s home. |
-| `modules/13-monit.sh` | Monit: stops Docker on a read-only `/data`, stops crash-looping containers, watches kernel memory, RAM, disk, temperature; alerts via ntfy. Plus a healthchecks.io ping every 5 min. Topic and ping URL live in `/data/homelab/notify.env`, outside the repo. |
+| `modules/13-monit.sh` | Monit: stops Docker on a read-only `/data`, stops crash-looping containers, watches kernel memory, RAM, disk, temperature, and any container Docker reports unhealthy; alerts via ntfy. Plus a healthchecks.io ping every 5 min. Topic and ping URL live in `/data/homelab/notify.env`, outside the repo. |
 | `modules/20-paperless.sh` | Paperless-ngx, and the template the other service modules follow. |
 | `modules/21-home-assistant.sh` | Home Assistant Container - host networking, config on `/data`. |
 | `modules/22-otbr.sh` | OpenThread Border Router. Needs a Thread radio on USB; skips when none is plugged in. |
@@ -173,7 +173,15 @@ Everything above is implemented, and the full cycle - install, reset, reinstall
 ## Things to watch for when extending this
 
 - New service modules follow `20-paperless.sh`: state on `/data`, everything
-  else treated as disposable by a reset.
+  else treated as disposable by a reset, and a `healthcheck:` in the compose
+  file. Without one the container counts as unwatched: Docker reports it `Up`
+  as long as its PID 1 lives, which says nothing about the service inside.
+  `otbr-agent` crash-looped for 18 days behind the s6 supervisor in its own
+  image while `docker ps` looked fine. `homelab-check unhealthy` reports
+  whatever the probes find, so the probe is the part that has to exist.
+- Compose files are written from unquoted heredocs, so a backtick or a bare
+  `$` in one - including in a YAML comment - is expanded by the shell before
+  it reaches the file.
 - A module that runs a service outside Docker (not the `20-paperless.sh`
   pattern) and needs `/data` present to start must add its unit to the
   `Upholds=docker.service` line in `modules/02-data.sh`, or it won't come

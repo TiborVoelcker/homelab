@@ -49,6 +49,22 @@ services:
     # enforceable only because modules/10-cgroups.sh enabled the memory
     # controller.
     mem_limit: 512m
+    # Docker only knows a container is up, not that the service inside it
+    # works. otbr-agent crash-looped for 18 days behind its image's own
+    # supervisor while the container reported "Up" and Monit's restart check,
+    # which watches container starts, saw nothing. A healthcheck is what makes
+    # that visible, and the unhealthy check in homelab-check is what reports
+    # it. Mind the backticks: this block is inside an unquoted heredoc.
+    # This image carries neither curl nor wget, so the probe goes through the
+    # node it does have. /health is Actual's own endpoint, and the certificate
+    # is self-signed and therefore deliberately not verified - the point is
+    # that Actual answers, not that TLS is trusted on loopback.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('https').get({host:'127.0.0.1',port:5006,path:'/health',rejectUnauthorized:false,timeout:5000},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 EOF
 ok "wrote compose file"
 

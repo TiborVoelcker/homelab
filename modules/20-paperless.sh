@@ -71,6 +71,20 @@ fi
 # The broker keeps its named volume on purpose: it is a Celery task queue, not
 # state worth preserving, and losing it on a reset costs nothing but a few
 # queued jobs.
+# The healthcheck entries are the third thing this override carries. Upstream
+# gives the webserver a probe but no start period, so its five retries all
+# fire before Django is listening and a cold start reports "unhealthy" for a
+# minute before recovering - noise that would page us on every reboot. A
+# mapping merges key by key, so naming start_period alone keeps upstream's
+# test command.
+#
+# 300s rather than something tighter because this is the slowest service here
+# to come up: measured at over three minutes before it accepts a connection,
+# and a cold boot with every other container starting at once is slower still.
+# A dead paperless is then five minutes late to report, which costs nothing.
+#
+# The broker has no probe at all; valkey-cli ping is the whole question worth
+# asking of a key-value store.
 cat > "$APP_DIR/docker-compose.override.yml" <<EOF
 services:
   webserver:
@@ -80,10 +94,18 @@ services:
       - $DATA/media:/usr/src/paperless/media
       - $DATA/export:/usr/src/paperless/export
       - $DATA/consume:/usr/src/paperless/consume
+    healthcheck:
+      start_period: 300s
   broker:
     mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 EOF
-ok "wrote memory caps and data paths override"
+ok "wrote memory caps, data paths and healthchecks override"
 
 cd "$APP_DIR" && docker compose up -d
 ok "paperless converged"

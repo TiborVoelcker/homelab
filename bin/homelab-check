@@ -62,8 +62,47 @@ docker)
     echo "docker is not running"
     exit 1
     ;;
+unhealthy)
+    # Docker's own healthcheck result, and the only signal here that catches a
+    # service dying *inside* a container that stays up. otbr-agent crash-looped
+    # for 18 days behind the s6 supervisor in its image: the container never
+    # restarted, so `restarts` above could not see it - it greps the journal
+    # for container starts - and `docker ps` said "Up" the entire time.
+    #
+    # Reports rather than acts. An unhealthy container may be mid-recovery,
+    # and what fixed the last one was a restart someone chose to do after
+    # looking. Each service defines its own probe in its own compose file,
+    # which is where the knowledge of what "working" means belongs.
+    unhealthy=() unprobed=() well=0
+    while read -r name; do
+        [[ -n "$name" ]] || continue
+        state=$(docker inspect \
+            -f '{{if .Config.Healthcheck}}{{.State.Health.Status}}{{else}}none{{end}}' \
+            "$name" 2>/dev/null) || continue
+        case "$state" in
+            # starting = still inside its start_period, not yet a verdict.
+            healthy|starting) well=$(( well + 1 )) ;;
+            none)             unprobed+=("$name") ;;
+            *)                unhealthy+=("$name ($state)") ;;
+        esac
+    done < <(docker ps --format '{{.Names}}')
+
+    if (( ${#unhealthy[@]} > 0 )); then
+        echo "unhealthy: ${unhealthy[*]}"
+        exit 1
+    fi
+
+    # A container with no probe is an unwatched service, worth saying out loud
+    # without paging anyone: ad-hoc `docker run`s land here too.
+    if (( ${#unprobed[@]} > 0 )); then
+        echo "$well healthy; no healthcheck: ${unprobed[*]}"
+    else
+        echo "$well containers healthy"
+    fi
+    exit 0
+    ;;
 *)
-    echo "usage: homelab-check data|restarts|kmem|temp|docker" >&2
+    echo "usage: homelab-check data|restarts|kmem|temp|docker|unhealthy" >&2
     exit 2
     ;;
 esac

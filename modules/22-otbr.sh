@@ -142,6 +142,23 @@ services:
       # Upstream defaults to 7 (debug), which is a lot of writes to an SD card
       # for a service that should just sit there. 5 is notice.
       OT_LOG_LEVEL: "5"
+    # Docker only knows a container is up, not that the service inside it
+    # works. otbr-agent crash-looped for 18 days behind its image's own
+    # supervisor while the container reported "Up" and Monit's restart check,
+    # which watches container starts, saw nothing. A healthcheck is what makes
+    # that visible, and the unhealthy check in homelab-check is what reports
+    # it. Mind the backticks: this block is inside an unquoted heredoc.
+    # This is the service that taught us to do this, so the probe asks the
+    # question that actually matters: is this node on the Thread mesh? Any of
+    # leader, router or child means yes. "detached" or "disabled" - or an
+    # ot-ctl that cannot reach a dead agent at all - means the border router
+    # is there in name only, which is exactly how it sat for 18 days.
+    healthcheck:
+      test: ["CMD-SHELL", "ot-ctl state | grep -qE '^(leader|router|child)'"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 EOF
 ok "wrote compose file"
 

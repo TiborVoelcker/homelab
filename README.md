@@ -184,9 +184,15 @@ disaster recovery answer.
 
 Copy `modules/20-paperless.sh`:
 
-- directories on `/data` so a reset preserves them
+- directories on `/data` so a reset preserves them - and check with
+  `docker compose config` that the service really mounts them. Creating the
+  directories is not the same as using them, and an upstream compose file
+  that declares named volumes instead will happily ignore them
 - upstream config fetched once, guarded by a file test
 - secrets generated once - regenerating orphans existing data
+- a `healthcheck:` that asks whether the service works, not whether the port
+  is open. `docker ps` says `Up` while a service crash-loops inside its own
+  container; `homelab-check unhealthy` only sees what the probes report
 - `docker compose up -d` unguarded; Compose reconciles state itself
 
 Most install instructions paste in nearly verbatim. Only lines that would be

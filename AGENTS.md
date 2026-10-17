@@ -119,7 +119,7 @@ be bootable.
 | `modules/06-mdns.sh` | Masks avahi. The Pi is named by the router's DNS (`raspberrypi.fritz.box`) instead of mDNS `.local`; containers keep their own mDNS. |
 | `modules/09-headless.sh` | Returns the GPU's firmware memory reservation (76MB -> 16MB) and stops camera/display probing. Needs a reboot. |
 | `modules/10-cgroups.sh` | Puts `cgroup_enable=memory` on the kernel cmdline, so containers can be given memory limits. Takes effect at the next reboot. |
-| `modules/11-docker.sh` | Docker Engine + Compose plugin from Debian's repos. |
+| `modules/11-docker.sh` | Docker Engine + Compose plugin from Debian's repos. Owns `/etc/docker/daemon.json`, which caps every container's log at 10MB x 3. |
 | `modules/12-claude-code.sh` | Claude Code, installed into `$SUDO_USER`'s home. |
 | `modules/13-monit.sh` | Monit: stops Docker on a read-only `/data`, stops crash-looping containers, watches kernel memory, RAM, disk, temperature; alerts via ntfy. Plus a healthchecks.io ping every 5 min. Topic and ping URL live in `/data/homelab/notify.env`, outside the repo. |
 | `modules/20-paperless.sh` | Paperless-ngx, and the template the other service modules follow. |

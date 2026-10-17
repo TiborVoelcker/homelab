@@ -71,7 +71,8 @@ monit -t || die "monit config invalid"
 # any failure, not just crashes: a monitor that quietly exits is worse than none.
 cat > /etc/systemd/system/monit.service <<'EOF'
 [Unit]
-Description=Monit
+Description=Pro-active monitoring utility for unix systems
+Documentation=man:monit(1) https://mmonit.com/wiki/Monit/HowTo
 After=network-online.target
 
 [Service]

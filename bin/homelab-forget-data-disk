@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Forget the data disk, so the next install.sh asks for a new one. Only for
+# replacing the disk: copy its data onto the new disk before running
+# install.sh, or the services start fresh on an empty one.
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$REPO_DIR/lib/common.sh"
+
+need_root
+mountpoint -q "$DATA_DIR" && die "$DATA_DIR is still mounted - unmount it first"
+
+line=$(awk -v d="$DATA_DIR" '$1 !~ /^#/ && $2 == d' /etc/fstab)
+[[ -n "$line" ]] || die "/etc/fstab has no $DATA_DIR line - nothing to forget"
+log "removing from /etc/fstab: $line"
+confirm "Type y to forget this disk" || die "cancelled"
+
+awk -v d="$DATA_DIR" '$1 ~ /^#/ || $2 != d' /etc/fstab > /etc/fstab.new \
+    && mv /etc/fstab.new /etc/fstab
+systemctl daemon-reload
+ok "forgot the data disk - run install.sh to pick the new one"

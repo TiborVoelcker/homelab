@@ -59,6 +59,17 @@ Paperless finds no database, concludes it is a fresh install, and initialises
 one on the SD card while your real documents sit untouched on the unmounted
 disk.
 
+To replace the disk, copy its contents onto the new one *before* running
+`install.sh` - otherwise the services start fresh on an empty disk:
+
+```bash
+sudo systemctl stop docker.socket docker.service
+sudo rsync -aHAX /data/ /mnt/new/      # new disk mounted at /mnt/new
+sudo umount /data /mnt/new
+sudo homelab-forget-data-disk
+sudo ./install.sh                      # pick the new disk
+```
+
 Hardware notes:
 
 - **SSD over spinning disk.** A bus-powered HDD can exceed the Pi's USB budget

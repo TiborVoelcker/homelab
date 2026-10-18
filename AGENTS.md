@@ -131,6 +131,7 @@ be bootable.
 | `modules/25-backup.sh` | Nightly encrypted off-site backup of `/data` with restic over rclone (Google Drive). Installs the timer; stays off until `/data/homelab/rclone.conf` exists. |
 | `bin/homelab-check` | The checks Monit runs. |
 | `bin/homelab-backup` | The nightly backup: `VACUUM INTO` every database on `/data`, then restic. Run by `homelab-backup.timer`. |
+| `bin/homelab-forget-data-disk` | Removes the `/data` fstab line, so the next `install.sh` asks for a new disk. Only for replacing the data disk. |
 | `bin/homelab-notify` | Sends an ntfy push; used by Monit, usable by hand. |
 | `bin/homelab-reset` | Arms the reset and triggers a tryboot. |
 | `bin/homelab-status` | Read-only snapshot: role, tryboot, partitions, `/data`, baseline age, armed? |

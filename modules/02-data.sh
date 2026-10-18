@@ -193,14 +193,12 @@ fi
 # same line.
 MOUNT_DROPIN_DIR="/etc/systemd/system/${mount_unit}.d"
 MOUNT_DROPIN="$MOUNT_DROPIN_DIR/10-uphold-dependents.conf"
-if [[ -f "$MOUNT_DROPIN" ]]; then
+uphold=$'[Unit]\nUpholds=docker.service'
+if [[ "$(cat "$MOUNT_DROPIN" 2>/dev/null)" == "$uphold" ]]; then
     skip "mount uphold dependency present"
 else
     mkdir -p "$MOUNT_DROPIN_DIR"
-    cat > "$MOUNT_DROPIN" <<EOF
-[Unit]
-Upholds=docker.service
-EOF
+    printf '%s\n' "$uphold" > "$MOUNT_DROPIN"
     systemctl daemon-reload
     ok "docker will restart automatically whenever $DATA_DIR comes back"
 fi

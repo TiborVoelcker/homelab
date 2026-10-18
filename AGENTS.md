@@ -121,7 +121,7 @@ be bootable.
 | `modules/09-headless.sh` | Returns the GPU's firmware memory reservation (76MB -> 16MB) and stops camera/display probing. Needs a reboot. |
 | `modules/10-cgroups.sh` | Puts `cgroup_enable=memory` on the kernel cmdline, so containers can be given memory limits. Takes effect at the next reboot. |
 | `modules/11-docker.sh` | Docker Engine + Compose plugin from Debian's repos. Owns `/etc/docker/daemon.json`, which caps every container's log at 10MB x 3. |
-| `modules/12-claude-code.sh` | Claude Code, installed into `$SUDO_USER`'s home. |
+| `modules/12-claude-code.sh` | Claude Code, installed into `$SUDO_USER`'s home, plus `claude-remote.service`: a tmux session with Remote Control enabled, started at boot so the Pi can be driven from a phone. Costs ~285MB of RAM. |
 | `modules/13-monit.sh` | Monit: stops Docker on a read-only `/data`, stops crash-looping containers, watches kernel memory, RAM, disk, temperature, the age of the last successful backup, and any container Docker reports unhealthy; alerts via ntfy. Plus a healthchecks.io ping every 5 min. Topic and ping URL live in `/data/homelab/notify.env`, outside the repo. |
 | `modules/20-paperless.sh` | Paperless-ngx, and the template the other service modules follow. |
 | `modules/21-home-assistant.sh` | Home Assistant Container - host networking, config on `/data`. |

@@ -67,8 +67,8 @@ Hardware notes:
   and can corrupt data. If yours is on a known-bad list, apply the matching
   `usb-storage.quirks` workaround in `cmdline.txt`.
 - **A separate disk is not a backup.** It protects against SD card failure and
-  makes resets safe, nothing more. Set up restic or borg pushing `/data`
-  somewhere else on a schedule.
+  makes resets safe, nothing more. `modules/25-backup.sh` backs `/data` up
+  off-site every night; it prints its remaining setup steps until configured.
 
 ## Install
 

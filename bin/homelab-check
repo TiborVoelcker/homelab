@@ -110,6 +110,11 @@ backup)
     # when /data is exactly what broke - which is when you most want to know
     # how old the backup is.
     STAMP=/var/lib/homelab/backup-stamp
+    # 25-backup.sh keeps the timer off until the backup is set up.
+    if ! systemctl is-enabled -q homelab-backup.timer; then
+        echo "backup not set up yet - see modules/25-backup.sh"
+        exit 0
+    fi
     if systemctl is-failed -q homelab-backup.service; then
         echo "last backup run failed - see journalctl -u homelab-backup"
         exit 1
@@ -118,7 +123,7 @@ backup)
         echo "no backup has ever completed"
         exit 1
     fi
-    hours=$(( ( $(date +%s) - $(date -d "$(cat "$STAMP")" +%s) ) / 3600 ))
+    hours=$(( ( $(date +%s) - $(stat -c %Y "$STAMP") ) / 3600 ))
     echo "last backup: ${hours}h ago"
     # Nightly, plus up to 30min of RandomizedDelaySec: 36h means a night was
     # missed, not that one ran late.

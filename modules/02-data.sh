@@ -13,13 +13,11 @@
 #   udev + Upholds=   -> remounts the disk and restarts Docker on its own if
 #                        the disk ever drops out and comes back
 #
-# The mount also asks for errors=remount-ro. ext4 otherwise defaults to
-# "Continue" - log an I/O error and keep taking writes - so a disk returning
-# bad data can go on corrupting itself quietly. It does nothing for the
-# common case here, a disk that drops off USB entirely (ext4 shuts the
-# filesystem down on its own then), but together with Monit's `data` check it
-# is now the whole of the corruption defence - see the long note further down
-# on why nothing checks or repairs this filesystem at boot any more.
+# Error behaviour is set on the filesystem itself rather than as a mount
+# option, so it holds however this disk gets mounted - see the note on
+# tune2fs -e below. Together with Monit's `data` check it is now the whole of
+# the corruption defence: see the longer note on why nothing checks or repairs
+# this filesystem at boot any more.
 set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
 
@@ -69,7 +67,7 @@ else
     fi
 
     # UUID, never /dev/sdX - device letters shift with enumeration order.
-    printf 'UUID=%s %s ext4 defaults,noatime,nofail,errors=remount-ro,x-systemd.device-timeout=30 0 0\n' \
+    printf 'UUID=%s %s ext4 defaults,noatime,nofail,x-systemd.device-timeout=30 0 0\n' \
         "$data_uuid" "$DATA_DIR" >> /etc/fstab
 
     systemctl daemon-reload
@@ -83,6 +81,32 @@ data_uuid=$(findmnt -no UUID "$DATA_DIR")
 mount_unit=$(systemd-escape --path --suffix=mount "$DATA_DIR")
 
 [[ -f "$DATA_MARKER" ]] || { touch "$DATA_MARKER"; ok "wrote data marker"; }
+
+data_dev=$(findmnt -no SOURCE "$DATA_DIR")
+
+# ---------- how the kernel reacts to an error ----------
+# ext4 defaults to "Continue": log the I/O error and carry on taking writes, so
+# a disk returning bad data goes on corrupting itself quietly. remount-ro makes
+# the kernel flip the filesystem read-only the instant it sees one, which stops
+# the damage spreading and is what Monit's `data` check then notices.
+#
+# This is a different mechanism from everything in the next section. It is the
+# running kernel reacting to an error it meets during normal use; e2fsck is an
+# offline tool that never consults it. What ties them together is that the
+# kernel also records "this filesystem had an error" in the superblock on its
+# way out, which is what later tells e2fsck something happened here.
+#
+# It goes in the superblock, not in the fstab options, so it holds for every
+# mount of this disk - a manual `mount /dev/sdX` elsewhere, a rescue boot, a
+# different machine - and not just for the one fstab line we control. A mount
+# option would OVERRIDE the superblock, which is why the fstab line above no
+# longer carries one.
+if tune2fs -l "$data_dev" | grep -qi '^Errors behavior:[[:space:]]*Remount read-only'; then
+    skip "$DATA_DIR already goes read-only on error"
+else
+    tune2fs -e remount-ro "$data_dev" >/dev/null
+    ok "$DATA_DIR will go read-only on the first I/O error"
+fi
 
 # ---------- no check, and above all no repair, at boot ----------
 # This filesystem used to be configured with `tune2fs -c 1`, which makes ext4
@@ -103,9 +127,7 @@ mount_unit=$(systemd-escape --path --suffix=mount "$DATA_DIR")
 # fault it was sent to fix.
 #
 # So nothing here checks or repairs at boot any more. Detection is left to the
-# guards that only ever REPORT: errors=remount-ro flips the mount read-only the
-# moment the kernel sees an I/O error, and Monit's `data` check then stops
-# Docker and pushes a notification. To check this filesystem deliberately,
+# guards above that only ever REPORT. To check this filesystem deliberately,
 # unmount it and run `e2fsck -fn /dev/sdXN` - `-n` answers no to every
 # question, so it reports without writing a single block.
 #
@@ -113,7 +135,6 @@ mount_unit=$(systemd-escape --path --suffix=mount "$DATA_DIR")
 # governs the ROOT filesystem, which does want unattended repair: a headless
 # Pi that drops to an emergency console after a power cut is a Pi you cannot
 # reach.
-data_dev=$(findmnt -no SOURCE "$DATA_DIR")
 fs_info=$(tune2fs -l "$data_dev")
 max_mounts=$(sed -n 's/^Maximum mount count:[[:space:]]*//p' <<<"$fs_info")
 interval=$(sed -n 's/^Check interval:[[:space:]]*//p' <<<"$fs_info")
@@ -124,23 +145,30 @@ else
     ok "removed the forced check from $DATA_DIR"
 fi
 
-# Field 6 of an fstab line is the "passno": anything non-zero asks systemd to
-# generate an fsck unit for that mount at boot. Zero is the half of the above
-# that fsck.repair=yes cannot override, so it is what actually stops the
-# unattended repair. Installs made before this change were written with 2;
-# correct them in place rather than making the repo disagree with the disk.
-if awk -v d="$DATA_DIR" \
-    '$1 !~ /^#/ && $2 == d && NF == 6 && $6 != "0" { found = 1 } END { exit !found }' \
-    /etc/fstab
+# Two fixups for installs made before the above, in one pass over fstab:
+#   - field 6 is the "passno": anything non-zero asks systemd to generate an
+#     fsck unit for this mount at boot. Zero is the half that fsck.repair=yes
+#     cannot override, so it is what actually stops the unattended repair.
+#   - errors= in field 4 would override the superblock setting, so strip it.
+# Correct them in place rather than letting the repo disagree with the disk.
+if awk -v d="$DATA_DIR" '
+    $1 !~ /^#/ && $2 == d && NF == 6 && ($6 != "0" || $4 ~ /(^|,)errors=/) { found = 1 }
+    END { exit !found }
+' /etc/fstab
 then
     awk -v d="$DATA_DIR" '
-        $1 !~ /^#/ && $2 == d && NF == 6 { print $1, $2, $3, $4, $5, "0"; next }
+        $1 !~ /^#/ && $2 == d && NF == 6 {
+            gsub(/(^|,)errors=[^,]*/, "", $4)
+            sub(/^,/, "", $4)
+            print $1, $2, $3, $4, $5, "0"
+            next
+        }
         { print }
     ' /etc/fstab > /etc/fstab.new && mv /etc/fstab.new /etc/fstab
     systemctl daemon-reload
-    ok "fstab: systemd will no longer fsck $DATA_DIR at boot"
+    ok "fstab: no boot fsck for $DATA_DIR, error behaviour left to the superblock"
 else
-    skip "fstab already tells systemd not to fsck $DATA_DIR"
+    skip "fstab entry for $DATA_DIR is already correct"
 fi
 
 # ---------- make Docker depend on the mount ----------

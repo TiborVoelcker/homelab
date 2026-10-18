@@ -84,13 +84,6 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# systemd gives a service no HOME, so restic cannot find a cache directory and
-# falls back to a fresh temporary one every run - which means re-downloading
-# the repository index each time. That is slow anywhere and actively harmful
-# against Google Drive, whose rate limits are the main reason a backup here
-# fails. The fallback also lands in /tmp, which is tmpfs on this host, so the
-# cache would be competing for the RAM the services need.
-Environment=RESTIC_CACHE_DIR=/var/cache/restic
 ExecStart=/usr/local/sbin/homelab-backup
 # Backups lose every race against the services they are backing up.
 Nice=10
@@ -108,37 +101,29 @@ RandomizedDelaySec=30m
 [Install]
 WantedBy=timers.target
 EOF
-install -d -m 700 /var/cache/restic
 systemctl daemon-reload
 ok "wrote backup service and timer"
 
-# ---------- rclone's remote ----------
-# OAuth needs a browser, which a headless Pi does not have, so this part
-# cannot be automated - it is written once by hand and then just copied.
+# ---------- enable, once there is somewhere to back up to ----------
+# rclone's remote holds an OAuth token, and OAuth needs a browser, which a
+# headless Pi does not have - so it is set up once by hand and then just copied.
 if [[ -f "$RCLONE_DATA" ]]; then
     install -D -m 600 "$RCLONE_DATA" "$RCLONE_FILE"
     ok "rclone remote present: $(sed -n 's/^\[\(.*\)\]$/\1/p' "$RCLONE_FILE" | paste -sd, -)"
-else
-    warn "no rclone remote yet - the timer stays off"
-    log "1. on a machine with a browser, run:"
-    log "     rclone authorize \"drive\" --drive-scope=drive.file"
-    log "2. copy the token it prints - the whole {\"access_token\":...} line - and on the Pi run:"
-    log "     printf '[gdrive]\\ntype = drive\\nscope = drive.file\\ntoken = %s\\n' '<PASTE>' \\"
-    log "       | sudo tee $RCLONE_DATA >/dev/null && sudo chmod 600 $RCLONE_DATA"
-    log "   the token alone in the file is not enough - it needs the [gdrive] section around it"
-    log "3. set RESTIC_REPOSITORY=rclone:gdrive:homelab in $ENV_DATA, then re-run this module"
-    log "drive.file scope keeps rclone to the files it creates itself, nothing else in Drive"
-    exit 0
 fi
-
-# ---------- enable, once there is somewhere to back up to ----------
 repo=$(sed -n 's/^RESTIC_REPOSITORY=//p' "$ENV_FILE")
-if [[ -z "$repo" ]]; then
+if [[ ! -f "$RCLONE_DATA" || -z "$repo" ]]; then
     systemctl disable --now homelab-backup.timer >/dev/null 2>&1 || true
-    warn "no backup target yet - the timer stays off"
-    log "set RESTIC_REPOSITORY (and its credentials) in $ENV_DATA, then re-run this module"
-    log "and copy RESTIC_PASSWORD out of $ENV_DATA into a password manager first:"
-    log "    without it the backup cannot be restored, by anyone"
+    warn "backup not configured yet - the timer stays off"
+    log "1. copy RESTIC_PASSWORD out of $ENV_DATA into a password manager:"
+    log "     without it the backup cannot be restored, by anyone"
+    log "2. create a Google client ID - the shared default one is heavily rate-limited:"
+    log "     https://rclone.org/drive/#making-your-own-client-id"
+    log "3. sudo rclone config --config $RCLONE_DATA"
+    log "     new remote 'gdrive', type drive, your client ID and secret, scope drive.file"
+    log "     (only the files rclone creates itself); answer n to auto config, run the"
+    log "     command it prints on a machine with a browser, paste the result back"
+    log "4. set RESTIC_REPOSITORY=rclone:gdrive:homelab in $ENV_DATA, then re-run this module"
     exit 0
 fi
 

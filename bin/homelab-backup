@@ -30,6 +30,9 @@ STAMP=/var/lib/homelab/backup-stamp
 # environment, so the whole file is exported rather than read key by key.
 set -a; source "$ENV_FILE"; set +a
 [[ -n "${RESTIC_REPOSITORY:-}" ]] || { echo "RESTIC_REPOSITORY is not set in $ENV_FILE" >&2; exit 1; }
+# A persistent cache, so each run does not download the index again from Drive.
+# Set here rather than in the unit, so a manual run shares it.
+export RESTIC_CACHE_DIR=${RESTIC_CACHE_DIR:-/var/cache/restic}
 
 findmnt -O rw "$DATA_DIR" >/dev/null || { echo "$DATA_DIR is not mounted read-write" >&2; exit 1; }
 
@@ -70,7 +73,9 @@ restic forget --tag homelab \
 
 # Structure only, no re-download of the data: seconds for a repository this
 # size, and it is the difference between having backups and believing in them.
-restic check
+# --with-cache, or check builds a throwaway cache in /tmp (tmpfs here) and
+# downloads every index and tree pack into it again.
+restic check --with-cache
 
 mkdir -p "$(dirname "$STAMP")"
 date -Is > "$STAMP"

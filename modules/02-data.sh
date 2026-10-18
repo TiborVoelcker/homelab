@@ -15,9 +15,11 @@
 #
 # The mount also asks for errors=remount-ro. ext4 otherwise defaults to
 # "Continue" - log an I/O error and keep taking writes - so a disk returning
-# bad data can go on corrupting itself quietly. This does nothing for the
+# bad data can go on corrupting itself quietly. It does nothing for the
 # common case here, a disk that drops off USB entirely (ext4 shuts the
-# filesystem down on its own then), but it costs one mount option.
+# filesystem down on its own then), but together with Monit's `data` check it
+# is now the whole of the corruption defence - see the long note further down
+# on why nothing checks or repairs this filesystem at boot any more.
 set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
 
@@ -67,7 +69,7 @@ else
     fi
 
     # UUID, never /dev/sdX - device letters shift with enumeration order.
-    printf 'UUID=%s %s ext4 defaults,noatime,nofail,errors=remount-ro,x-systemd.device-timeout=30 0 2\n' \
+    printf 'UUID=%s %s ext4 defaults,noatime,nofail,errors=remount-ro,x-systemd.device-timeout=30 0 0\n' \
         "$data_uuid" "$DATA_DIR" >> /etc/fstab
 
     systemctl daemon-reload
@@ -82,24 +84,63 @@ mount_unit=$(systemd-escape --path --suffix=mount "$DATA_DIR")
 
 [[ -f "$DATA_MARKER" ]] || { touch "$DATA_MARKER"; ok "wrote data marker"; }
 
-# ---------- force a real check at every mount ----------
-# systemd-fsck runs `e2fsck -a` (preen), and preen SKIPS the check entirely on
-# a filesystem marked clean. A filesystem is marked clean whenever its journal
-# replayed, which says nothing about whether its metadata is consistent - so
-# corruption left behind by an unclean USB drop sails straight through the boot
-# check and only detonates later, in use. That is exactly what happened here
-# once: the disk dropped, came back, mounted "clean", and the damage surfaced
-# 40 seconds into the next boot.
+# ---------- no check, and above all no repair, at boot ----------
+# This filesystem used to be configured with `tune2fs -c 1`, which makes ext4
+# demand a full check at every single mount. The reasoning was sound:
+# systemd-fsck runs `e2fsck -a` (preen mode), preen SKIPS a filesystem that is
+# marked clean, and a filesystem gets marked clean whenever its journal
+# replayed - which says nothing at all about whether its metadata is
+# consistent. So damage left by an unclean USB drop could sail through the boot
+# check and only detonate later, in use.
 #
-# Maximum mount count 1 makes ext4 demand a real check every time instead. It
-# costs about a second, because fsck scales with the metadata in use (~130MB)
-# rather than with the size of the partition.
+# The flaw was not the checking. It was that checking and REPAIRING were the
+# same unattended action. The stock Raspberry Pi cmdline carries
+# fsck.repair=yes, so the forced check ran as `e2fsck -y` - say yes to every
+# question - and on a filesystem whose root directory was already damaged it
+# said yes to "Resize inode not valid. Recreate?". It declared success; the
+# kernel rejected the filesystem one second later; the directory tree was
+# gone. An automatic repairer with nobody watching can destroy more than the
+# fault it was sent to fix.
+#
+# So nothing here checks or repairs at boot any more. Detection is left to the
+# guards that only ever REPORT: errors=remount-ro flips the mount read-only the
+# moment the kernel sees an I/O error, and Monit's `data` check then stops
+# Docker and pushes a notification. To check this filesystem deliberately,
+# unmount it and run `e2fsck -fn /dev/sdXN` - `-n` answers no to every
+# question, so it reports without writing a single block.
+#
+# fsck.repair=yes itself stays exactly as Raspberry Pi OS ships it. It also
+# governs the ROOT filesystem, which does want unattended repair: a headless
+# Pi that drops to an emergency console after a power cut is a Pi you cannot
+# reach.
 data_dev=$(findmnt -no SOURCE "$DATA_DIR")
-if [[ "$(tune2fs -l "$data_dev" | sed -n 's/^Maximum mount count:[[:space:]]*//p')" == "1" ]]; then
-    skip "$DATA_DIR already forces a check at every mount"
+fs_info=$(tune2fs -l "$data_dev")
+max_mounts=$(sed -n 's/^Maximum mount count:[[:space:]]*//p' <<<"$fs_info")
+interval=$(sed -n 's/^Check interval:[[:space:]]*//p' <<<"$fs_info")
+if [[ "$max_mounts" == "-1" && "$interval" == 0* ]]; then
+    skip "$DATA_DIR has no forced check"
 else
-    tune2fs -c 1 "$data_dev" >/dev/null
-    ok "$DATA_DIR will be checked at every mount"
+    tune2fs -c 0 -i 0 "$data_dev" >/dev/null
+    ok "removed the forced check from $DATA_DIR"
+fi
+
+# Field 6 of an fstab line is the "passno": anything non-zero asks systemd to
+# generate an fsck unit for that mount at boot. Zero is the half of the above
+# that fsck.repair=yes cannot override, so it is what actually stops the
+# unattended repair. Installs made before this change were written with 2;
+# correct them in place rather than making the repo disagree with the disk.
+if awk -v d="$DATA_DIR" \
+    '$1 !~ /^#/ && $2 == d && NF == 6 && $6 != "0" { found = 1 } END { exit !found }' \
+    /etc/fstab
+then
+    awk -v d="$DATA_DIR" '
+        $1 !~ /^#/ && $2 == d && NF == 6 { print $1, $2, $3, $4, $5, "0"; next }
+        { print }
+    ' /etc/fstab > /etc/fstab.new && mv /etc/fstab.new /etc/fstab
+    systemctl daemon-reload
+    ok "fstab: systemd will no longer fsck $DATA_DIR at boot"
+else
+    skip "fstab already tells systemd not to fsck $DATA_DIR"
 fi
 
 # ---------- make Docker depend on the mount ----------

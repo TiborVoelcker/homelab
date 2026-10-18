@@ -20,11 +20,12 @@ set -euo pipefail
 
 DATA_DIR=/data
 SNAP_DIR=$DATA_DIR/snapshots
-ENV_FILE=/etc/homelab/backup.env
+ENV_FILE=$DATA_DIR/homelab/backup.env
 # On the SD card, not /data: `homelab-check backup` must be able to report the
 # age of the last backup even when /data is the thing that is broken.
 STAMP=/var/lib/homelab/backup-stamp
 
+findmnt -O rw "$DATA_DIR" >/dev/null || { echo "$DATA_DIR is not mounted read-write" >&2; exit 1; }
 [[ -r "$ENV_FILE" ]] || { echo "no $ENV_FILE - run modules/25-backup.sh" >&2; exit 1; }
 # restic takes its repository, password and provider credentials from the
 # environment, so the whole file is exported rather than read key by key.
@@ -33,8 +34,6 @@ set -a; source "$ENV_FILE"; set +a
 # A persistent cache, so each run does not download the index again from Drive.
 # Set here rather than in the unit, so a manual run shares it.
 export RESTIC_CACHE_DIR=${RESTIC_CACHE_DIR:-/var/cache/restic}
-
-findmnt -O rw "$DATA_DIR" >/dev/null || { echo "$DATA_DIR is not mounted read-write" >&2; exit 1; }
 
 # ---------- consistent copies of the live databases ----------
 # Found rather than listed, so a service added later is covered without

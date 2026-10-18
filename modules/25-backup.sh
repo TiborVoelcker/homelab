@@ -26,14 +26,10 @@ set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
 need_root
 
+# Both live on /data only: a reset must not orphan the repository or
+# de-authorise Drive, and the backup cannot run without /data anyway.
 ENV_DATA=/data/homelab/backup.env
-ENV_FILE=/etc/homelab/backup.env
-# rclone's own config holds the Google Drive OAuth token: a credential, so it
-# follows notify.env's split - kept on /data so a reset does not de-authorise
-# the backup, copied to /etc so a backup still runs when /data is mounted but
-# the repo working tree is not around.
 RCLONE_DATA=/data/homelab/rclone.conf
-RCLONE_FILE=/etc/homelab/rclone.conf
 SERVICE=/etc/systemd/system/homelab-backup.service
 TIMER=/etc/systemd/system/homelab-backup.timer
 
@@ -41,9 +37,6 @@ apt-get install -y restic rclone sqlite3 >/dev/null
 ok "restic, rclone and sqlite3 installed"
 
 # ---------- credentials ----------
-# Same split as notify.env: generated once and kept on /data so a reset does
-# not orphan the repository, copied to /etc so a backup can still run when
-# /data is mounted but the repo working tree is not around.
 if [[ -f "$ENV_DATA" ]]; then
     skip "backup settings present"
 else
@@ -59,14 +52,13 @@ RESTIC_REPOSITORY=rclone:gdrive:homelab
 # including you. KEEP A COPY SOMEWHERE THAT IS NOT THIS PI.
 RESTIC_PASSWORD=$(openssl rand -base64 24)
 
-# rclone reads its remotes from here rather than from root's home, so the
-# token travels with /data.
-RCLONE_CONFIG=$RCLONE_FILE
+# rclone reads its remotes, and writes refreshed tokens, here rather than in
+# root's home, so the token travels with /data.
+RCLONE_CONFIG=$RCLONE_DATA
 EOF
     chmod 600 "$ENV_DATA"
     ok "generated backup settings"
 fi
-install -D -m 600 "$ENV_DATA" "$ENV_FILE"
 
 # ---------- schedule ----------
 # Deliberately not Persistent=true: a missed night should show up as a stale
@@ -104,12 +96,11 @@ ok "wrote backup service and timer"
 
 # ---------- enable, once there is somewhere to back up to ----------
 # rclone's remote holds an OAuth token, and OAuth needs a browser, which a
-# headless Pi does not have - so it is set up once by hand and then just copied.
+# headless Pi does not have - so it is set up once by hand.
 if [[ -f "$RCLONE_DATA" ]]; then
-    install -D -m 600 "$RCLONE_DATA" "$RCLONE_FILE"
-    ok "rclone remote present: $(sed -n 's/^\[\(.*\)\]$/\1/p' "$RCLONE_FILE" | paste -sd, -)"
+    ok "rclone remote present: $(sed -n 's/^\[\(.*\)\]$/\1/p' "$RCLONE_DATA" | paste -sd, -)"
 fi
-repo=$(sed -n 's/^RESTIC_REPOSITORY=//p' "$ENV_FILE")
+repo=$(sed -n 's/^RESTIC_REPOSITORY=//p' "$ENV_DATA")
 if [[ ! -f "$RCLONE_DATA" || -z "$repo" ]]; then
     systemctl disable --now homelab-backup.timer >/dev/null 2>&1 || true
     warn "backup not configured yet - the timer stays off"
@@ -126,7 +117,7 @@ if [[ ! -f "$RCLONE_DATA" || -z "$repo" ]]; then
 fi
 
 # init is idempotent in effect but not in exit code, so ask first.
-set -a; source "$ENV_FILE"; set +a
+set -a; source "$ENV_DATA"; set +a
 if restic cat config >/dev/null 2>&1; then
     skip "restic repository already initialised"
 else

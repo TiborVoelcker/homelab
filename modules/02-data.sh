@@ -27,6 +27,24 @@ detect_disk
 
 mkdir -p "$DATA_DIR"
 
+# ---------- drop a stale fstab entry ----------
+# A stale entry is worse than no entry: the block below would see /data in
+# fstab, skip the whole setup, and then die trying to mount a disk that is not
+# there. That happens every time the data disk is replaced, because a new
+# filesystem means a new UUID - so an entry naming a UUID that no longer
+# exists is removed and the selection below runs again.
+#
+# Only UUID= entries are considered. A hand-written LABEL= or /dev/sdX line is
+# somebody's deliberate choice and is left alone.
+stale_uuid=$(awk -v d="$DATA_DIR" \
+    '$1 ~ /^UUID=/ && $2 == d { sub(/^UUID=/, "", $1); print $1; exit }' /etc/fstab)
+if [[ -n "$stale_uuid" && ! -e "/dev/disk/by-uuid/$stale_uuid" ]]; then
+    awk -v d="$DATA_DIR" '$1 ~ /^#/ || $2 != d' /etc/fstab > /etc/fstab.new \
+        && mv /etc/fstab.new /etc/fstab
+    systemctl daemon-reload
+    warn "dropped the $DATA_DIR line: its disk (UUID=$stale_uuid) is gone"
+fi
+
 # ---------- already configured? ----------
 if grep -q "[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab; then
     skip "fstab already has $DATA_DIR"

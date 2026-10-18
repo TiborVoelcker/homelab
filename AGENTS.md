@@ -112,7 +112,7 @@ be bootable.
 | `lib/common.sh` | Sourced by everything, including `reset-main.sh` inside the baseline. Output helpers, guards, layout constants, copy and cmdline primitives. |
 | `modules/00-storage.sh` | Carves `p3`/`p4` out of unallocated space. |
 | `modules/01-create-baseline.sh` | Captures the baseline onto `p3`/`p4`, once; writes `autoboot.txt`. |
-| `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted and writable; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. Deliberately disables the boot-time fsck (`tune2fs -c 0`, passno `0`) and puts `errors=remount-ro` in the superblock instead - see `docs/storage.md`. |
+| `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted and writable; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. Deliberately disables the boot-time fsck (`tune2fs -c 0`, passno `0`) and puts `errors=remount-ro` in the superblock instead; the module's own header explains why. |
 | `modules/03-upgrade.sh` | `apt-get update && upgrade`. |
 | `modules/04-journal.sh` | Keeps the journal on disk. RPi OS defaults it to RAM, so a power cut erases the logs explaining the power cut. Capped at 200M. |
 | `modules/05-arp.sh` | Stops ARP flux on this dual-homed host: each NIC answers only for its own address. Matters because the Pi is dialled into by address. |
@@ -128,7 +128,7 @@ be bootable.
 | `modules/22-otbr.sh` | OpenThread Border Router. Needs a Thread radio on USB; skips when none is plugged in. |
 | `modules/23-matter-server.sh` | python-matter-server - lets Home Assistant commission Matter (incl. Matter-over-Thread) devices. |
 | `modules/24-actualbudget.sh` | Actual Budget on port 5006, HTTPS with a self-signed cert (it needs a secure context). |
-| `modules/25-backup.sh` | Nightly encrypted off-site backup of `/data` with restic. Installs the timer; stays off until `RESTIC_REPOSITORY` is set in `/data/homelab/backup.env`. |
+| `modules/25-backup.sh` | Nightly encrypted off-site backup of `/data` with restic over rclone (Google Drive). Installs the timer; stays off until `/data/homelab/rclone.conf` and `RESTIC_REPOSITORY` exist. |
 | `bin/homelab-check` | The checks Monit runs. |
 | `bin/homelab-backup` | The nightly backup: `VACUUM INTO` every database on `/data`, then restic. Run by `homelab-backup.timer`. |
 | `bin/homelab-notify` | Sends an ntfy push; used by Monit, usable by hand. |

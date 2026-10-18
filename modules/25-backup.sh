@@ -6,11 +6,19 @@
 # 2026-10-17 an unattended boot-time fsck destroyed it and Home Assistant's
 # entire configuration went with it, because no copy existed anywhere.
 #
-# restic is used for three properties, in order of why it was chosen:
-# encrypted (/data/homeassistant/config/.storage holds password and refresh
-# token hashes), off-site (a second copy on this Pi dies with this Pi), and
-# snapshotted with retention (so "what did that automation look like last
-# week" has an answer).
+# restic rather than rsync or plain rclone, because a MIRROR is not protection
+# against what actually happened: the data was destroyed in place, and a sync
+# would have faithfully replicated that destruction to the far end. Sync tools
+# protect against losing a device; they treat this side as the truth. Snapshots
+# with retention survive corruption, a bad fsck and a fat-fingered rm.
+#
+# The other two reasons: restic encrypts by default, which is not optional when
+# /data/homeassistant/config/.storage holds password and refresh token hashes;
+# and `restic check` can say whether the repository is still readable, which a
+# mirror has no concept of.
+#
+# rclone is the transport underneath it. restic has a first-class rclone:
+# backend, and rclone is the only one of these that speaks Google Drive's API.
 #
 # The schedule, the exclusions and the SQLite handling live in
 # bin/homelab-backup; this module installs it and wires it up.
@@ -20,11 +28,17 @@ need_root
 
 ENV_DATA=/data/homelab/backup.env
 ENV_FILE=/etc/homelab/backup.env
+# rclone's own config holds the Google Drive OAuth token: a credential, so it
+# follows notify.env's split - kept on /data so a reset does not de-authorise
+# the backup, copied to /etc so a backup still runs when /data is mounted but
+# the repo working tree is not around.
+RCLONE_DATA=/data/homelab/rclone.conf
+RCLONE_FILE=/etc/homelab/rclone.conf
 SERVICE=/etc/systemd/system/homelab-backup.service
 TIMER=/etc/systemd/system/homelab-backup.timer
 
-apt-get install -y restic sqlite3 >/dev/null
-ok "restic and sqlite3 installed"
+apt-get install -y restic rclone sqlite3 >/dev/null
+ok "restic, rclone and sqlite3 installed"
 
 # ---------- credentials ----------
 # Same split as notify.env: generated once and kept on /data so a reset does
@@ -35,10 +49,11 @@ if [[ -f "$ENV_DATA" ]]; then
 else
     mkdir -p "$(dirname "$ENV_DATA")"
     cat > "$ENV_DATA" <<EOF
-# Where the backup goes. restic understands many backends; pick one and put
-# its credentials below. Examples:
+# Where the backup goes. Anything rclone speaks works, via the rclone:
+# backend - the remote name here must match the one in rclone.conf:
+#   rclone:gdrive:homelab
+# restic's own backends work too, if this ever moves off Drive:
 #   b2:bucket-name:homelab
-#   s3:s3.eu-central-1.amazonaws.com/bucket-name/homelab
 #   sftp:user@host:/srv/backup/homelab
 RESTIC_REPOSITORY=
 
@@ -46,9 +61,9 @@ RESTIC_REPOSITORY=
 # including you. KEEP A COPY SOMEWHERE THAT IS NOT THIS PI.
 RESTIC_PASSWORD=$(openssl rand -base64 24)
 
-# Provider credentials, as the backend needs them. For Backblaze B2:
-#B2_ACCOUNT_ID=
-#B2_ACCOUNT_KEY=
+# rclone reads its remotes from here rather than from root's home, so the
+# token travels with /data.
+RCLONE_CONFIG=$RCLONE_FILE
 EOF
     chmod 600 "$ENV_DATA"
     ok "generated backup settings"
@@ -88,6 +103,24 @@ WantedBy=timers.target
 EOF
 systemctl daemon-reload
 ok "wrote backup service and timer"
+
+# ---------- rclone's remote ----------
+# OAuth needs a browser, which a headless Pi does not have, so this part
+# cannot be automated - it is written once by hand and then just copied.
+if [[ -f "$RCLONE_DATA" ]]; then
+    install -D -m 600 "$RCLONE_DATA" "$RCLONE_FILE"
+    ok "rclone remote present: $(sed -n 's/^\[\(.*\)\]$/\1/p' "$RCLONE_FILE" | paste -sd, -)"
+else
+    warn "no rclone remote yet - the timer stays off"
+    log "on a machine with a browser:  rclone authorize \"drive\" --drive-scope=drive.file"
+    log "then write the token it prints into $RCLONE_DATA as:"
+    log "    [gdrive]"
+    log "    type = drive"
+    log "    scope = drive.file"
+    log "    token = {\"access_token\":...}"
+    log "drive.file scope keeps rclone to the files it creates itself, nothing else in Drive"
+    exit 0
+fi
 
 # ---------- enable, once there is somewhere to back up to ----------
 repo=$(sed -n 's/^RESTIC_REPOSITORY=//p' "$ENV_FILE")

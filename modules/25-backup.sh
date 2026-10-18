@@ -49,13 +49,11 @@ if [[ -f "$ENV_DATA" ]]; then
 else
     mkdir -p "$(dirname "$ENV_DATA")"
     cat > "$ENV_DATA" <<EOF
-# Where the backup goes. Anything rclone speaks works, via the rclone:
-# backend - the remote name here must match the one in rclone.conf:
-#   rclone:gdrive:homelab
-# restic's own backends work too, if this ever moves off Drive:
+# Where the backup goes: the 'gdrive' remote in rclone.conf. Any rclone remote
+# works the same way, and so do restic's own backends if this moves off Drive:
 #   b2:bucket-name:homelab
 #   sftp:user@host:/srv/backup/homelab
-RESTIC_REPOSITORY=
+RESTIC_REPOSITORY=rclone:gdrive:homelab
 
 # Encrypts the repository. Without it the backup cannot be read, by anyone,
 # including you. KEEP A COPY SOMEWHERE THAT IS NOT THIS PI.
@@ -123,7 +121,7 @@ if [[ ! -f "$RCLONE_DATA" || -z "$repo" ]]; then
     log "     new remote 'gdrive', type drive, your client ID and secret, scope drive.file"
     log "     (only the files rclone creates itself); answer n to auto config, run the"
     log "     command it prints on a machine with a browser, paste the result back"
-    log "4. set RESTIC_REPOSITORY=rclone:gdrive:homelab in $ENV_DATA, then re-run this module"
+    log "4. re-run this module"
     exit 0
 fi
 

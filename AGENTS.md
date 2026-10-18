@@ -128,7 +128,7 @@ be bootable.
 | `modules/22-otbr.sh` | OpenThread Border Router. Needs a Thread radio on USB; skips when none is plugged in. |
 | `modules/23-matter-server.sh` | python-matter-server - lets Home Assistant commission Matter (incl. Matter-over-Thread) devices. |
 | `modules/24-actualbudget.sh` | Actual Budget on port 5006, HTTPS with a self-signed cert (it needs a secure context). |
-| `modules/25-backup.sh` | Nightly encrypted off-site backup of `/data` with restic over rclone (Google Drive). Installs the timer; stays off until `/data/homelab/rclone.conf` and `RESTIC_REPOSITORY` exist. |
+| `modules/25-backup.sh` | Nightly encrypted off-site backup of `/data` with restic over rclone (Google Drive). Installs the timer; stays off until `/data/homelab/rclone.conf` exists. |
 | `bin/homelab-check` | The checks Monit runs. |
 | `bin/homelab-backup` | The nightly backup: `VACUUM INTO` every database on `/data`, then restic. Run by `homelab-backup.timer`. |
 | `bin/homelab-notify` | Sends an ntfy push; used by Monit, usable by hand. |

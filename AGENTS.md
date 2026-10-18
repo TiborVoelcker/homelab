@@ -112,7 +112,7 @@ be bootable.
 | `lib/common.sh` | Sourced by everything, including `reset-main.sh` inside the baseline. Output helpers, guards, layout constants, copy and cmdline primitives. |
 | `modules/00-storage.sh` | Carves `p3`/`p4` out of unallocated space. |
 | `modules/01-create-baseline.sh` | Captures the baseline onto `p3`/`p4`, once; writes `autoboot.txt`. |
-| `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted and writable; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. Deliberately disables the boot-time fsck (`tune2fs -c 0`, passno `0`) and puts `errors=remount-ro` in the superblock instead; the module's own header explains why. |
+| `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted and writable; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. Deliberately disables the boot-time fsck (passno `0`) and puts `errors=remount-ro` in the superblock instead; the module's own header explains why. |
 | `modules/03-upgrade.sh` | `apt-get update && upgrade`. |
 | `modules/04-journal.sh` | Keeps the journal on disk. RPi OS defaults it to RAM, so a power cut erases the logs explaining the power cut. Capped at 200M. |
 | `modules/05-arp.sh` | Stops ARP flux on this dual-homed host: each NIC answers only for its own address. Matters because the Pi is dialled into by address. |

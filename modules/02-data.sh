@@ -15,9 +15,9 @@
 #
 # Error behaviour is set on the filesystem itself rather than as a mount
 # option, so it holds however this disk gets mounted - see the note on
-# tune2fs -e below. Together with Monit's `data` check it is now the whole of
-# the corruption defence: see the longer note on why nothing checks or repairs
-# this filesystem at boot any more.
+# tune2fs -e below. Together with Monit's `data` check it is the whole of the
+# corruption defence: nothing checks or repairs this filesystem at boot - see
+# the note on the fstab line for why.
 set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
 
@@ -85,6 +85,16 @@ else
     fi
 
     # UUID, never /dev/sdX - device letters shift with enumeration order.
+    #
+    # The final 0 (passno) means no fsck at boot. The stock Raspberry Pi
+    # cmdline carries fsck.repair=yes, so a boot check runs as `e2fsck -y`:
+    # yes to every repair, with nobody watching. On a filesystem that is
+    # already damaged that can destroy more than the fault - on 2026-10-17 it
+    # erased this disk's directory tree. Detection is left to errors=remount-ro
+    # below and Monit's `data` check, which only ever report. To check by hand,
+    # unmount and run `e2fsck -fn /dev/sdXN`: -n reports without writing.
+    # fsck.repair=yes itself stays, because it also governs the root
+    # filesystem, which does want unattended repair on a headless Pi.
     printf 'UUID=%s %s ext4 defaults,noatime,nofail,x-systemd.device-timeout=30 0 0\n' \
         "$data_uuid" "$DATA_DIR" >> /etc/fstab
 
@@ -108,7 +118,7 @@ data_dev=$(findmnt -no SOURCE "$DATA_DIR")
 # the kernel flip the filesystem read-only the instant it sees one, which stops
 # the damage spreading and is what Monit's `data` check then notices.
 #
-# This is a different mechanism from everything in the next section. It is the
+# This is a different mechanism from the boot-time fsck. It is the
 # running kernel reacting to an error it meets during normal use; e2fsck is an
 # offline tool that never consults it. What ties them together is that the
 # kernel also records "this filesystem had an error" in the superblock on its
@@ -117,8 +127,8 @@ data_dev=$(findmnt -no SOURCE "$DATA_DIR")
 # It goes in the superblock, not in the fstab options, so it holds for every
 # mount of this disk - a manual `mount /dev/sdX` elsewhere, a rescue boot, a
 # different machine - and not just for the one fstab line we control. A mount
-# option would OVERRIDE the superblock, which is why the fstab line above no
-# longer carries one.
+# option would OVERRIDE the superblock, which is why the fstab line above
+# carries none.
 if tune2fs -l "$data_dev" | grep -qi '^Errors behavior:[[:space:]]*Remount read-only'; then
     skip "$DATA_DIR already goes read-only on error"
 else
@@ -131,8 +141,7 @@ fi
 # mounted - and a plain `mount -o remount` does not re-read it either, only an
 # explicit option does. Without this, a first install against a fresh mkfs
 # leaves /data running on errors=continue (the mkfs default) until the next
-# reboot: exactly the window where this is the only guard left, now that
-# nothing checks the filesystem at boot.
+# reboot - and with no check at boot, this is the only guard there is.
 #
 # /proc/fs/ext4/<dev>/options is the only view that shows what the kernel is
 # really using. /proc/mounts and findmnt do not report it.
@@ -140,69 +149,6 @@ live_errors=$(sed -n 's/^errors=//p' "/proc/fs/ext4/$(basename "$data_dev")/opti
 if [[ "$live_errors" != "remount-ro" ]]; then
     mount -o remount,errors=remount-ro "$DATA_DIR"
     ok "applied errors=remount-ro to the running mount too"
-fi
-
-# ---------- no check, and above all no repair, at boot ----------
-# This filesystem used to be configured with `tune2fs -c 1`, which makes ext4
-# demand a full check at every single mount. The reasoning was sound:
-# systemd-fsck runs `e2fsck -a` (preen mode), preen SKIPS a filesystem that is
-# marked clean, and a filesystem gets marked clean whenever its journal
-# replayed - which says nothing at all about whether its metadata is
-# consistent. So damage left by an unclean USB drop could sail through the boot
-# check and only detonate later, in use.
-#
-# The flaw was not the checking. It was that checking and REPAIRING were the
-# same unattended action. The stock Raspberry Pi cmdline carries
-# fsck.repair=yes, so the forced check ran as `e2fsck -y` - say yes to every
-# question - and on a filesystem whose root directory was already damaged it
-# said yes to "Resize inode not valid. Recreate?". It declared success; the
-# kernel rejected the filesystem one second later; the directory tree was
-# gone. An automatic repairer with nobody watching can destroy more than the
-# fault it was sent to fix.
-#
-# So nothing here checks or repairs at boot any more. Detection is left to the
-# guards above that only ever REPORT. To check this filesystem deliberately,
-# unmount it and run `e2fsck -fn /dev/sdXN` - `-n` answers no to every
-# question, so it reports without writing a single block.
-#
-# fsck.repair=yes itself stays exactly as Raspberry Pi OS ships it. It also
-# governs the ROOT filesystem, which does want unattended repair: a headless
-# Pi that drops to an emergency console after a power cut is a Pi you cannot
-# reach.
-fs_info=$(tune2fs -l "$data_dev")
-max_mounts=$(sed -n 's/^Maximum mount count:[[:space:]]*//p' <<<"$fs_info")
-interval=$(sed -n 's/^Check interval:[[:space:]]*//p' <<<"$fs_info")
-if [[ "$max_mounts" == "-1" && "$interval" == 0* ]]; then
-    skip "$DATA_DIR has no forced check"
-else
-    tune2fs -c 0 -i 0 "$data_dev" >/dev/null
-    ok "removed the forced check from $DATA_DIR"
-fi
-
-# Two fixups for installs made before the above, in one pass over fstab:
-#   - field 6 is the "passno": anything non-zero asks systemd to generate an
-#     fsck unit for this mount at boot. Zero is the half that fsck.repair=yes
-#     cannot override, so it is what actually stops the unattended repair.
-#   - errors= in field 4 would override the superblock setting, so strip it.
-# Correct them in place rather than letting the repo disagree with the disk.
-if awk -v d="$DATA_DIR" '
-    $1 !~ /^#/ && $2 == d && NF == 6 && ($6 != "0" || $4 ~ /(^|,)errors=/) { found = 1 }
-    END { exit !found }
-' /etc/fstab
-then
-    awk -v d="$DATA_DIR" '
-        $1 !~ /^#/ && $2 == d && NF == 6 {
-            gsub(/(^|,)errors=[^,]*/, "", $4)
-            sub(/^,/, "", $4)
-            print $1, $2, $3, $4, $5, "0"
-            next
-        }
-        { print }
-    ' /etc/fstab > /etc/fstab.new && mv /etc/fstab.new /etc/fstab
-    systemctl daemon-reload
-    ok "fstab: no boot fsck for $DATA_DIR, error behaviour left to the superblock"
-else
-    skip "fstab entry for $DATA_DIR is already correct"
 fi
 
 # ---------- make Docker depend on the mount ----------

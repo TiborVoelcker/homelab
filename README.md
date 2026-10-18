@@ -45,7 +45,7 @@ to re-image rather than improvising.
 Format it yourself first - the scripts never format anything:
 
 ```bash
-sudo mkfs.ext4 -L homelab-data /dev/sdXN
+sudo mkfs.ext4 -e remount-ro -L homelab-data /dev/sdXN
 ```
 
 **ext4 specifically.** exFAT and NTFS cannot store Unix ownership, which

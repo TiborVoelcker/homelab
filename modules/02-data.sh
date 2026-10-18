@@ -60,7 +60,7 @@ else
         echo
         log "Pick the partition to mount at $DATA_DIR."
         log "This script never formats anything - format it yourself first with:"
-        log "    sudo mkfs.ext4 -L homelab-data /dev/sdXN"
+        log "    sudo mkfs.ext4 -e remount-ro -L homelab-data /dev/sdXN"
         log "ext4 is required; exFAT and NTFS cannot store Unix ownership,"
         log "which container volumes need."
         echo
@@ -95,6 +95,10 @@ fi
 
 mountpoint -q "$DATA_DIR" || mount "$DATA_DIR" || die "could not mount $DATA_DIR"
 ok "$DATA_DIR mounted from $(findmnt -no SOURCE "$DATA_DIR")"
+# Read-only means the kernel met an error. The remount below would make it
+# writable again (fstab's "defaults" include rw), so repair comes first.
+findmnt -O rw "$DATA_DIR" >/dev/null \
+    || die "$DATA_DIR is read-only - unmount it, repair with e2fsck, then re-run"
 
 data_uuid=$(findmnt -no UUID "$DATA_DIR")
 mount_unit=$(systemd-escape --path --suffix=mount "$DATA_DIR")
@@ -104,22 +108,11 @@ mount_unit=$(systemd-escape --path --suffix=mount "$DATA_DIR")
 data_dev=$(findmnt -no SOURCE "$DATA_DIR")
 
 # ---------- how the kernel reacts to an error ----------
-# ext4 defaults to "Continue": log the I/O error and carry on taking writes, so
-# a disk returning bad data goes on corrupting itself quietly. remount-ro makes
-# the kernel flip the filesystem read-only the instant it sees one, which stops
-# the damage spreading and is what Monit's `data` check then notices.
-#
-# This is a different mechanism from the boot-time fsck. It is the
-# running kernel reacting to an error it meets during normal use; e2fsck is an
-# offline tool that never consults it. What ties them together is that the
-# kernel also records "this filesystem had an error" in the superblock on its
-# way out, which is what later tells e2fsck something happened here.
-#
-# It goes in the superblock, not in the fstab options, so it holds for every
-# mount of this disk - a manual `mount /dev/sdX` elsewhere, a rescue boot, a
-# different machine - and not just for the one fstab line we control. A mount
-# option would OVERRIDE the superblock, which is why the fstab line above
-# carries none.
+# ext4 defaults to "Continue": log the I/O error and keep taking writes, so a
+# failing disk goes on corrupting itself quietly. remount-ro flips it read-only
+# on the first error, which stops the damage and is what Monit's `data` check
+# notices. Set in the superblock rather than fstab, so it holds for every mount
+# of this disk, not just this fstab line.
 if tune2fs -l "$data_dev" | grep -qi '^Errors behavior:[[:space:]]*Remount read-only'; then
     skip "$DATA_DIR already goes read-only on error"
 else
@@ -127,20 +120,10 @@ else
     ok "$DATA_DIR will go read-only on the first I/O error"
 fi
 
-# The kernel reads s_errors once, at mount time, and then keeps its own copy,
-# so writing the superblock does not reach a filesystem that is already
-# mounted - and a plain `mount -o remount` does not re-read it either, only an
-# explicit option does. Without this, a first install against a fresh mkfs
-# leaves /data running on errors=continue (the mkfs default) until the next
-# reboot - and with no check at boot, this is the only guard there is.
-#
-# /proc/fs/ext4/<dev>/options is the only view that shows what the kernel is
-# really using. /proc/mounts and findmnt do not report it.
-live_errors=$(sed -n 's/^errors=//p' "/proc/fs/ext4/$(basename "$data_dev")/options" 2>/dev/null)
-if [[ "$live_errors" != "remount-ro" ]]; then
-    mount -o remount,errors=remount-ro "$DATA_DIR"
-    ok "applied errors=remount-ro to the running mount too"
-fi
+# The kernel reads the superblock setting only at mount time, so the running
+# mount gets it explicitly. Idempotent.
+mount -o remount,errors=remount-ro "$DATA_DIR"
+ok "running mount goes read-only on error"
 
 # ---------- make Docker depend on the mount ----------
 # The rw check matters because a read-only /data is still a mounted /data:

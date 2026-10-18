@@ -126,6 +126,22 @@ else
     ok "$DATA_DIR will go read-only on the first I/O error"
 fi
 
+# The kernel reads s_errors once, at mount time, and then keeps its own copy,
+# so writing the superblock does not reach a filesystem that is already
+# mounted - and a plain `mount -o remount` does not re-read it either, only an
+# explicit option does. Without this, a first install against a fresh mkfs
+# leaves /data running on errors=continue (the mkfs default) until the next
+# reboot: exactly the window where this is the only guard left, now that
+# nothing checks the filesystem at boot.
+#
+# /proc/fs/ext4/<dev>/options is the only view that shows what the kernel is
+# really using. /proc/mounts and findmnt do not report it.
+live_errors=$(sed -n 's/^errors=//p' "/proc/fs/ext4/$(basename "$data_dev")/options" 2>/dev/null)
+if [[ "$live_errors" != "remount-ro" ]]; then
+    mount -o remount,errors=remount-ro "$DATA_DIR"
+    ok "applied errors=remount-ro to the running mount too"
+fi
+
 # ---------- no check, and above all no repair, at boot ----------
 # This filesystem used to be configured with `tune2fs -c 1`, which makes ext4
 # demand a full check at every single mount. The reasoning was sound:
@@ -220,13 +236,15 @@ fi
 # are only pulled in once at boot (WantedBy=local-fs.target), not
 # re-triggered when the device reappears later. udev noticing the device
 # come back is the standard, built-in hook for that.
+# Compared by content, not just existence: the rule embeds the disk's UUID, so
+# replacing the data disk leaves a rule that matches a disk which no longer
+# exists and silently stops recovering the new one.
 UDEV_RULE=/etc/udev/rules.d/99-data-recover.rules
-if [[ -f "$UDEV_RULE" ]]; then
+rule="ACTION==\"add\", SUBSYSTEM==\"block\", ENV{ID_FS_UUID}==\"$data_uuid\", RUN+=\"/usr/bin/systemctl --no-block start $mount_unit\""
+if [[ "$(cat "$UDEV_RULE" 2>/dev/null)" == "$rule" ]]; then
     skip "data-recover udev rule present"
 else
-    cat > "$UDEV_RULE" <<EOF
-ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_UUID}=="$data_uuid", RUN+="/usr/bin/systemctl --no-block start $mount_unit"
-EOF
+    printf '%s\n' "$rule" > "$UDEV_RULE"
     udevadm control --reload-rules
     ok "udev will remount $DATA_DIR when the disk reappears after a drop"
 fi

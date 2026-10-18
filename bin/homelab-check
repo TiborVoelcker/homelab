@@ -101,8 +101,27 @@ unhealthy)
     fi
     exit 0
     ;;
+backup)
+    # The backup writes this stamp only after restic has finished and verified
+    # the repository, so a stale stamp covers every way it can fail: no
+    # network, wrong credentials, full bucket, a crash halfway through.
+    #
+    # The stamp lives on the SD card rather than /data, so this still answers
+    # when /data is exactly what broke - which is when you most want to know
+    # how old the backup is.
+    STAMP=/var/lib/homelab/backup-stamp
+    if [[ ! -f "$STAMP" ]]; then
+        echo "no backup has ever completed"
+        exit 1
+    fi
+    hours=$(( ( $(date +%s) - $(date -d "$(cat "$STAMP")" +%s) ) / 3600 ))
+    echo "last backup: ${hours}h ago"
+    # Nightly, plus up to 30min of RandomizedDelaySec: 36h means a night was
+    # missed, not that one ran late.
+    (( hours < 36 ))
+    ;;
 *)
-    echo "usage: homelab-check data|restarts|kmem|temp|docker|unhealthy" >&2
+    echo "usage: homelab-check data|restarts|kmem|temp|docker|unhealthy|backup" >&2
     exit 2
     ;;
 esac

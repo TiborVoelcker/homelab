@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Nightly off-site backup of /data, run by homelab-backup.timer.
+#
+# /data is the only home of everything that cannot be rebuilt: Home Assistant's
+# configuration, the Paperless library, the Thread and Matter credentials, the
+# budget. The repo deliberately does not version-control any of it - it changes
+# as the system is lived with - so this backup is that data's only safety net.
+#
+# Two things make it more than `restic backup /data`:
+#
+#   SQLite cannot be copied while it is being written. A file-level copy of a
+#   live database in WAL mode may be torn and may not open at all, so every
+#   database gets a consistent copy first via VACUUM INTO, which takes a read
+#   transaction and needs nothing stopped. The live files are then excluded.
+#
+#   The snapshots are named *.sqlite-snapshot rather than keeping their own
+#   extension, so the `*.db` and `*.sqlite3` excludes below cannot swallow the
+#   very copies this script just made.
+set -euo pipefail
+
+DATA_DIR=/data
+SNAP_DIR=$DATA_DIR/snapshots
+ENV_FILE=/etc/homelab/backup.env
+# On the SD card, not /data: `homelab-check backup` must be able to report the
+# age of the last backup even when /data is the thing that is broken.
+STAMP=/var/lib/homelab/backup-stamp
+
+[[ -r "$ENV_FILE" ]] || { echo "no $ENV_FILE - run modules/25-backup.sh" >&2; exit 1; }
+# restic takes its repository, password and provider credentials from the
+# environment, so the whole file is exported rather than read key by key.
+set -a; source "$ENV_FILE"; set +a
+[[ -n "${RESTIC_REPOSITORY:-}" ]] || { echo "RESTIC_REPOSITORY is not set in $ENV_FILE" >&2; exit 1; }
+
+findmnt -O rw "$DATA_DIR" >/dev/null || { echo "$DATA_DIR is not mounted read-write" >&2; exit 1; }
+
+# ---------- consistent copies of the live databases ----------
+# Found rather than listed, so a service added later is covered without
+# touching this script. The snapshot mirrors its source's path under
+# $SNAP_DIR, which keeps two services' db.sqlite3 from colliding.
+mkdir -p "$SNAP_DIR"
+while IFS= read -r db; do
+    out="$SNAP_DIR/${db#"$DATA_DIR"/}.sqlite-snapshot"
+    mkdir -p "$(dirname "$out")"
+    rm -f "$out.new"
+    # .timeout waits out a writer holding the lock instead of failing at once.
+    if sqlite3 -cmd '.timeout 30000' "$db" "VACUUM INTO '$out.new'" 2>/dev/null; then
+        mv "$out.new" "$out"          # atomic: restic never sees a partial file
+        echo "snapshot: ${db#"$DATA_DIR"/}"
+    else
+        rm -f "$out.new"
+        echo "warning: ${db#"$DATA_DIR"/} is not a readable SQLite database - skipped" >&2
+    fi
+done < <(find "$DATA_DIR" -path "$SNAP_DIR" -prune -o \
+    -type f \( -name '*.db' -o -name '*.sqlite3' \) -print)
+
+# ---------- the backup itself ----------
+# The live databases are excluded by extension rather than by path, so this
+# needs no per-service knowledge either.
+restic backup "$DATA_DIR" \
+    --tag homelab \
+    --exclude '*.db'       --exclude '*.db-wal'       --exclude '*.db-shm' \
+    --exclude '*.sqlite3'  --exclude '*.sqlite3-wal'  --exclude '*.sqlite3-shm' \
+    --exclude "$DATA_DIR/paperless/consume"
+
+# Keeping daily/weekly/monthly is what gives this the one property version
+# control would have: "what did that automation look like last week".
+restic forget --tag homelab \
+    --keep-daily 7 --keep-weekly 4 --keep-monthly 12 \
+    --prune
+
+# Structure only, no re-download of the data: seconds for a repository this
+# size, and it is the difference between having backups and believing in them.
+restic check
+
+mkdir -p "$(dirname "$STAMP")"
+date -Is > "$STAMP"
+echo "backup complete"

@@ -112,7 +112,7 @@ be bootable.
 | `lib/common.sh` | Sourced by everything, including `reset-main.sh` inside the baseline. Output helpers, guards, layout constants, copy and cmdline primitives. |
 | `modules/00-storage.sh` | Carves `p3`/`p4` out of unallocated space. |
 | `modules/01-create-baseline.sh` | Captures the baseline onto `p3`/`p4`, once; writes `autoboot.txt`. |
-| `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted and writable; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. |
+| `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted and writable; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. Deliberately disables the boot-time fsck (`tune2fs -c 0`, passno `0`) and puts `errors=remount-ro` in the superblock instead - see `docs/storage.md`. |
 | `modules/03-upgrade.sh` | `apt-get update && upgrade`. |
 | `modules/04-journal.sh` | Keeps the journal on disk. RPi OS defaults it to RAM, so a power cut erases the logs explaining the power cut. Capped at 200M. |
 | `modules/05-arp.sh` | Stops ARP flux on this dual-homed host: each NIC answers only for its own address. Matters because the Pi is dialled into by address. |
@@ -122,13 +122,15 @@ be bootable.
 | `modules/10-cgroups.sh` | Puts `cgroup_enable=memory` on the kernel cmdline, so containers can be given memory limits. Takes effect at the next reboot. |
 | `modules/11-docker.sh` | Docker Engine + Compose plugin from Debian's repos. Owns `/etc/docker/daemon.json`, which caps every container's log at 10MB x 3. |
 | `modules/12-claude-code.sh` | Claude Code, installed into `$SUDO_USER`'s home. |
-| `modules/13-monit.sh` | Monit: stops Docker on a read-only `/data`, stops crash-looping containers, watches kernel memory, RAM, disk, temperature, and any container Docker reports unhealthy; alerts via ntfy. Plus a healthchecks.io ping every 5 min. Topic and ping URL live in `/data/homelab/notify.env`, outside the repo. |
+| `modules/13-monit.sh` | Monit: stops Docker on a read-only `/data`, stops crash-looping containers, watches kernel memory, RAM, disk, temperature, the age of the last successful backup, and any container Docker reports unhealthy; alerts via ntfy. Plus a healthchecks.io ping every 5 min. Topic and ping URL live in `/data/homelab/notify.env`, outside the repo. |
 | `modules/20-paperless.sh` | Paperless-ngx, and the template the other service modules follow. |
 | `modules/21-home-assistant.sh` | Home Assistant Container - host networking, config on `/data`. |
 | `modules/22-otbr.sh` | OpenThread Border Router. Needs a Thread radio on USB; skips when none is plugged in. |
 | `modules/23-matter-server.sh` | python-matter-server - lets Home Assistant commission Matter (incl. Matter-over-Thread) devices. |
 | `modules/24-actualbudget.sh` | Actual Budget on port 5006, HTTPS with a self-signed cert (it needs a secure context). |
+| `modules/25-backup.sh` | Nightly encrypted off-site backup of `/data` with restic. Installs the timer; stays off until `RESTIC_REPOSITORY` is set in `/data/homelab/backup.env`. |
 | `bin/homelab-check` | The checks Monit runs. |
+| `bin/homelab-backup` | The nightly backup: `VACUUM INTO` every database on `/data`, then restic. Run by `homelab-backup.timer`. |
 | `bin/homelab-notify` | Sends an ntfy push; used by Monit, usable by hand. |
 | `bin/homelab-reset` | Arms the reset and triggers a tryboot. |
 | `bin/homelab-status` | Read-only snapshot: role, tryboot, partitions, `/data`, baseline age, armed? |
@@ -179,6 +181,10 @@ Everything above is implemented, and the full cycle - install, reset, reinstall
   `otbr-agent` crash-looped for 18 days behind the s6 supervisor in its own
   image while `docker ps` looked fine. `homelab-check unhealthy` reports
   whatever the probes find, so the probe is the part that has to exist.
+- A new service needs **no backup changes**. `bin/homelab-backup` finds every
+  `*.db` and `*.sqlite3` under `/data`, takes a `VACUUM INTO` copy of each, and
+  excludes the live files by glob. Just put the service's state on `/data`. Do
+  not give a snapshot its source's extension, or the excludes will swallow it.
 - Compose files are written from unquoted heredocs, so a backtick or a bare
   `$` in one - including in a YAML comment - is expanded by the shell before
   it reaches the file.
@@ -189,7 +195,9 @@ Everything above is implemented, and the full cycle - install, reset, reinstall
   modules don't need this - Docker restarts its own containers once it's
   back up.
 - Never regenerate a secret that already exists on disk - that orphans whatever
-  data was encrypted or keyed with the old one.
+  data was encrypted or keyed with the old one. `RESTIC_PASSWORD` is the worst
+  case: it is the only thing that can decrypt the backups, and it needs a copy
+  somewhere that is not this Pi at all.
 - Keep the baseline minimal. Every addition is a way a reset system can
   differ from a freshly flashed one.
 - `reset-main.sh` runs from a copy of `lib/common.sh` installed at

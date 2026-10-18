@@ -40,6 +40,7 @@ export RESTIC_CACHE_DIR=${RESTIC_CACHE_DIR:-/var/cache/restic}
 # touching this script. The snapshot mirrors its source's path under
 # $SNAP_DIR, which keeps two services' db.sqlite3 from colliding.
 mkdir -p "$SNAP_DIR"
+skipped=0
 while IFS= read -r db; do
     out="$SNAP_DIR/${db#"$DATA_DIR"/}.sqlite-snapshot"
     mkdir -p "$(dirname "$out")"
@@ -50,7 +51,8 @@ while IFS= read -r db; do
         echo "snapshot: ${db#"$DATA_DIR"/}"
     else
         rm -f "$out.new"
-        echo "warning: ${db#"$DATA_DIR"/} is not a readable SQLite database - skipped" >&2
+        echo "error: ${db#"$DATA_DIR"/} is not a readable SQLite database - not backed up" >&2
+        skipped=1
     fi
 done < <(find "$DATA_DIR" -path "$SNAP_DIR" -prune -o \
     -type f \( -name '*.db' -o -name '*.sqlite3' \) -print)
@@ -75,6 +77,10 @@ restic forget --tag homelab \
 # --with-cache, or check builds a throwaway cache in /tmp (tmpfs here) and
 # downloads every index and tree pack into it again.
 restic check --with-cache
+
+# Everything else is backed up by now, but the excludes dropped the live copy
+# of any database without a snapshot - so fail the run and leave no stamp.
+(( ! skipped )) || { echo "backup incomplete: see the errors above" >&2; exit 1; }
 
 mkdir -p "$(dirname "$STAMP")"
 date -Is > "$STAMP"

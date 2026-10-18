@@ -110,6 +110,10 @@ backup)
     # when /data is exactly what broke - which is when you most want to know
     # how old the backup is.
     STAMP=/var/lib/homelab/backup-stamp
+    if systemctl is-failed -q homelab-backup.service; then
+        echo "last backup run failed - see journalctl -u homelab-backup"
+        exit 1
+    fi
     if [[ ! -f "$STAMP" ]]; then
         echo "no backup has ever completed"
         exit 1

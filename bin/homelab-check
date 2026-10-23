@@ -4,6 +4,13 @@
 set -euo pipefail
 DATA_DIR=/data
 
+# docker.socket accepts a connection even when docker.service cannot start
+# (02-data.sh's drop-in blocks it without /data), and the client then waits
+# forever: Monit killed this script each cycle and orphaned a ~28MB client,
+# 178 of them in 15 hours until the Pi was in swap. A wedged daemon does the
+# same with /data present, so bound the call rather than test for that case.
+docker() { timeout 15 docker "$@"; }
+
 case "${1:-}" in
 data)
     # A read-only /data makes containers crash-loop, and every container start
@@ -15,7 +22,7 @@ data)
         echo "$DATA_DIR is mounted read-write"
         exit 0
     fi
-    if systemctl is-active -q docker; then
+    if systemctl is-active -q docker.socket || systemctl is-active -q docker.service; then
         systemctl stop docker.socket docker.service
         echo "$DATA_DIR is not writable - stopped Docker. Repair with fsck and remount; Docker then comes back on its own."
     else

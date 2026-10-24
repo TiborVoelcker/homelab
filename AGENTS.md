@@ -8,17 +8,20 @@ inside a single file. `README.md` is the setup and day-to-day guide.
 ## What we're trying to achieve
 
 Reproducible, script-driven provisioning for a Raspberry Pi homelab, plus a
-self-hosted "reset button": if the live system gets into a bad state, restore
-a pristine copy of the flashed OS - no second computer, no fresh SD card, no
-physical access beyond a reboot.
+self-hosted "reset button": a wipe-and-rebuild that puts back a pristine copy
+of the flashed OS so the repo can re-provision from a clean slate - no second
+computer, no prepared media, no physical access beyond a reboot. It is a
+wiping tool first; getting out of a bad state is a side effect. A rescue stick
+is therefore no substitute for it, because the whole value is that nothing has
+to be prepared.
 
 The design rests on one decision: **`install.sh` is the only thing that defines
 the desired state.** Everything it builds is disposable, because it can be
-rebuilt. So recovery is one path, whatever went wrong:
+rebuilt. So there is one path back to a known system, from any state:
 
 ```
-bad state -> homelab-reset -> pristine baseline -> install.sh -> working homelab
-fresh card                 -> pristine baseline -> install.sh -> working homelab
+any state  -> homelab-reset -> pristine baseline -> install.sh -> working homelab
+fresh card                  -> pristine baseline -> install.sh -> working homelab
 ```
 
 Those two rows must stay interchangeable. Anything that makes a reset system
@@ -206,6 +209,15 @@ Everything above is implemented, and the full cycle - install, reset, reinstall
 - `reset-main.sh` runs from a copy of `lib/common.sh` installed at
   `/usr/local/lib/homelab/common.sh`. A new `common.sh` helper that assumes it
   is running on the live system will break the reset side.
+- A change made only on the live machine is temporary: the next reset wipes
+  it. If it should last, it goes in a module.
+- The repo builds the shape of the system; `/data` holds its content. Home
+  Assistant mixes config and content in one directory, so all of it counts as
+  content and is **never committed** - it changes too often for the repo to
+  stay truthful. Backups are its only safety net.
 - Write docs and comments for someone seeing this repo for the first time.
   Explain what is here and why it works this way; leave what it replaced to the
   commit history.
+- No `docs/` folder and no decision records. Rationale for shipped behaviour
+  goes in its module's header comment, repo-wide conventions here, setup in
+  `README.md`. Ideas that were not taken are not recorded anywhere.

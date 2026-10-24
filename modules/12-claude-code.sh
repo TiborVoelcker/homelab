@@ -13,7 +13,7 @@
 #
 #   Remote Control needs an INTERACTIVE session, so it needs a pty. tmux
 #   supplies one and has the side benefit that the same session can be
-#   attached to locally with `tmux attach -t claude`.
+#   attached to locally with `tmux attach -t Claude`.
 #
 #   It is a system unit with User= rather than a user unit, because lingering
 #   is off for this account (`loginctl show-user`: Linger=no) and a user unit
@@ -81,11 +81,12 @@ RemainAfterExit=yes
 User=$user
 WorkingDirectory=$WORKSPACE
 Environment=HOME=$home
-ExecStart=/usr/bin/tmux new-session -d -s claude -c $WORKSPACE $home/.local/bin/claude --remote-control
+# %H is systemd's hostname, so the session is listed under this machine's name.
+ExecStart=/usr/bin/tmux new-session -d -s Claude -c $WORKSPACE $home/.local/bin/claude remote-control --name %H
 # Keeps the pane after claude exits, so a failed login or a crash can be read
-# with \`tmux attach -t claude\` instead of vanishing with the session.
-ExecStartPost=/usr/bin/tmux set-option -t claude remain-on-exit on
-ExecStop=/usr/bin/tmux kill-session -t claude
+# with \`tmux attach -t Claude\` instead of vanishing with the session.
+ExecStartPost=/usr/bin/tmux set-option -t Claude remain-on-exit on
+ExecStop=/usr/bin/tmux kill-session -t Claude
 
 [Install]
 WantedBy=multi-user.target
@@ -102,6 +103,6 @@ fi
 systemctl enable claude-remote.service >/dev/null 2>&1 \
     && ok "claude code will start with remote control at boot" \
     || warn "could not enable claude-remote.service"
-log "attach locally with: tmux attach -t claude"
+log "attach locally with: tmux attach -t Claude"
 log "a session costs ~200-320MB of RAM, which is material on this Pi -"
 log "stop it with: sudo systemctl stop claude-remote"

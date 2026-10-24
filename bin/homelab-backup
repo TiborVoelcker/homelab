@@ -42,6 +42,17 @@ export RESTIC_CACHE_DIR=${RESTIC_CACHE_DIR:-/var/cache/restic}
 mkdir -p "$SNAP_DIR"
 skipped=0
 while IFS= read -r db; do
+    # Found by extension, so a *.db that is no kind of SQLite arrives here too:
+    # Paperless's celerybeat-schedule.db is a GNU dbm file. VACUUM INTO cannot
+    # read it, and failing the whole run over a regenerable scheduler cache
+    # trains you to ignore the night a failure is real - so what counts as a
+    # database is decided by content, not by name. A file whose header does say
+    # SQLite and still will not snapshot is a real failure and still stops the
+    # run below.
+    if [[ "$(head -c 15 "$db" | tr -d '\0')" != 'SQLite format 3' ]]; then
+        echo "not SQLite, excluded and not backed up: ${db#"$DATA_DIR"/}"
+        continue
+    fi
     out="$SNAP_DIR/${db#"$DATA_DIR"/}.sqlite-snapshot"
     mkdir -p "$(dirname "$out")"
     rm -f "$out.new"

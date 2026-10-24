@@ -183,8 +183,10 @@ Everything above is implemented, and the full cycle - install, reset, reinstall
   image while `docker ps` looked fine. `homelab-check unhealthy` reports
   whatever the probes find, so the probe is the part that has to exist.
 - A new service needs **no backup changes**. `bin/homelab-backup` finds every
-  `*.db` and `*.sqlite3` under `/data`, takes a `VACUUM INTO` copy of each, and
-  excludes the live files by glob. Just put the service's state on `/data`. Do
+  `*.db` and `*.sqlite3` under `/data`, takes a `VACUUM INTO` copy of each one
+  whose header really is SQLite, and excludes the live files by glob. A file
+  that only looks like a database by its name is reported and skipped, not
+  treated as a failure. Just put the service's state on `/data`. Do
   not give a snapshot its source's extension, or the excludes will swallow it.
 - Compose files are written from unquoted heredocs, so a backtick or a bare
   `$` in one - including in a YAML comment - is expanded by the shell before

@@ -1,0 +1,3 @@
+# A checked-out git worktree: a second copy of this repo, tracked files and
+# all. Committing it once would nest the repository inside itself.
+.claude/

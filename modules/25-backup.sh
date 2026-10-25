@@ -49,7 +49,7 @@ else
 RESTIC_REPOSITORY=rclone:gdrive:homelab
 
 # Encrypts the repository. Without it the backup cannot be read, by anyone,
-# including you. KEEP A COPY SOMEWHERE THAT IS NOT THIS PI.
+# including you. KEEP A COPY SOMEWHERE THAT IS NOT THIS MACHINE.
 RESTIC_PASSWORD=$(openssl rand -base64 24)
 
 # rclone reads its remotes, and writes refreshed tokens, here rather than in
@@ -96,7 +96,7 @@ ok "wrote backup service and timer"
 
 # ---------- enable, once there is somewhere to back up to ----------
 # rclone's remote holds an OAuth token, and OAuth needs a browser, which a
-# headless Pi does not have - so it is set up once by hand.
+# headless machine does not have - so it is set up once by hand.
 if [[ -f "$RCLONE_DATA" ]]; then
     ok "rclone remote present: $(sed -n 's/^\[\(.*\)\]$/\1/p' "$RCLONE_DATA" | paste -sd, -)"
 fi

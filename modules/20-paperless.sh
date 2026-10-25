@@ -44,9 +44,9 @@ fi
 # undone by a re-fetch and would conflict on upstream changes. Compose merges
 # docker-compose.override.yml automatically. Written every run, because unlike
 # the upstream file this one is ours and re-writing it is how an edit here
-# reaches the Pi.
+# reaches the host.
 #
-# Paperless is the greediest service on a 2GB Pi: OCR on a large scan can
+# Paperless is the greediest service here: OCR on a large scan can
 # balloon the webserver container well past its idle ~200MB. Without a cap the
 # kernel's OOM killer picks a victim by its own heuristics when memory runs
 # out, and Home Assistant - large and long-lived - is an attractive target. A

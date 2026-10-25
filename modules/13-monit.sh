@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Monitoring: Monit checks the Pi every 30s, acts where it can and pushes to
-# the phone via ntfy. healthchecks.io covers what nothing on the Pi can - the
-# Pi itself being dead or frozen.
+# Monitoring: Monit checks this machine every 30s, acts where it can and
+# pushes to the phone via ntfy. healthchecks.io covers what nothing on the
+# machine can - the machine itself being dead or frozen.
 #
 # Monit runs on the host, not in Docker and not from /data, so it keeps
 # working when exactly those break. The checks themselves live in
@@ -26,7 +26,7 @@ if [[ -f "$ENV_DATA" ]]; then
 else
     mkdir -p "$(dirname "$ENV_DATA")"
     cat > "$ENV_DATA" <<EOF
-NTFY_URL=https://ntfy.sh/homelab-pi-$(openssl rand -hex 8)
+NTFY_URL=https://ntfy.sh/homelab-$(openssl rand -hex 8)
 # Ping URL from healthchecks.io, e.g. https://hc-ping.com/<uuid>
 HC_URL=${HOMELAB_HC_URL:-}
 EOF

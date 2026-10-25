@@ -50,16 +50,21 @@ restarts)
     ;;
 kmem)
     # Unreclaimable kernel memory, hidden inside "used" everywhere else.
-    # Normally ~40MB; the crash-loop leak above is what drives it up.
+    # ~135MB here with every service up; the crash-loop leak above is what
+    # drives it up, and it reached ~570MB on the Pi.
     kb=$(awk '/^SUnreclaim:/ { print $2 }' /proc/meminfo)
     echo "unreclaimable kernel memory: $(( kb / 1024 ))MB"
-    (( kb < 200 * 1024 ))
+    (( kb < 400 * 1024 ))
     ;;
 temp)
-    # The Pi starts throttling at 80°C.
-    t=$(( $(cat /sys/class/thermal/thermal_zone0/temp) / 1000 ))
+    # The CPU package sensor, found by type: zone numbers are not stable, and
+    # thermal_zone0 is the chipset here. The i3-7100 throttles at 100°C and
+    # sat at 70°C with one thread busy in this small case.
+    zone=$(grep -lx x86_pkg_temp /sys/class/thermal/thermal_zone*/type | head -1 || true)
+    [[ -n "$zone" ]] || { echo "no x86_pkg_temp thermal zone - cannot read the CPU temperature"; exit 1; }
+    t=$(( $(cat "${zone%/type}/temp") / 1000 ))
     echo "CPU temperature: ${t}°C"
-    (( t < 75 ))
+    (( t < 90 ))
     ;;
 docker)
     if systemctl is-active -q docker; then

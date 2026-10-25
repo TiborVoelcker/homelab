@@ -95,10 +95,13 @@ a power cut always lands back on `BootOrder` with no action needed - that's
 the fail-safe the whole design leans on. Confirmed on this board.
 
 The baseline's entry is created with `efibootmgr -C`, which leaves it out of
-`BootOrder`. This firmware edits NVRAM on its own, though - it has been seen
-adding entries to `BootOrder` and creating extra `debian` entries pointing
-straight at `grubx64.efi` - so `01-create-baseline.sh` re-checks `BootOrder`
-on every run, and the reset never relies on it (see "Reset gates").
+`BootOrder`. This firmware edits NVRAM on its own, though. It appends new
+entries to `BootOrder`, and the first time it boots from an ESP it creates a
+`debian` entry of its own pointing straight at `grubx64.efi`, which skips the
+shim and so cannot start anything with Secure Boot on. That happens once per
+ESP, not once per reset. `01-create-baseline.sh` keeps both the baseline and
+those shim-less entries out of `BootOrder` on every run, without deleting
+them, and the reset never relies on `BootOrder` (see "Reset gates").
 
 The reset boots into the baseline because you cannot rsync over the
 filesystem you are running from. That is the only reason the baseline needs to
@@ -174,9 +177,9 @@ install, which is why it is worth keeping short.
 
 ## Current status
 
-The boot and storage layer has been ported from the Raspberry Pi to this
-machine and the baseline is in place, but a reset has **not** yet been
-exercised here. `MIGRATION.md` tracks what is left.
+Everything above is implemented, and the full cycle - install, reset,
+reinstall - was exercised on this machine on 2026-10-25. `MIGRATION.md`
+lists what is still open from the move off the Raspberry Pi.
 
 ## Things to watch for when extending this
 

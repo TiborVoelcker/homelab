@@ -19,7 +19,7 @@ DATA=/data/matter-server
 mkdir -p "$APP_DIR" "$DATA"
 
 # Written every run: this file is ours rather than fetched, so rewriting it is
-# how an edit here reaches the Pi.
+# how an edit here reaches the host.
 cat > "$APP_DIR/docker-compose.yml" <<EOF
 services:
   matter-server:

@@ -1,4 +1,4 @@
-# raspi-homelab
+# homelab
 
 Convergent, script-driven provisioning for my homelab - a headless Fujitsu
 ESPRIMO Q556/2 (x86, UEFI) that took over from a Raspberry Pi, hence the
@@ -64,6 +64,11 @@ sudo debootstrap --arch=amd64 --components=main,non-free-firmware \
   --include=linux-image-amd64,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,efibootmgr,openssh-server,sudo,dbus,systemd-resolved,intel-microcode,firmware-misc-nonfree,locales,ca-certificates,curl,git,rsync \
   trixie /mnt/rootA https://deb.debian.org/debian
 ```
+
+`non-free-firmware` carries `intel-microcode` (the BIOS's own microcode dates
+from 2018) and `firmware-misc-nonfree` (the i915 DMC firmware, without which
+the GPU never reaches its low-power states). `dbus` is named because
+debootstrap skips "either/or" dependencies, and `systemd-resolved` needs it.
 
 and finish it in a chroot (with `/dev`, `/proc` and `/sys` bind-mounted, and
 ESP-A at `/mnt/rootA/boot/efi`):
@@ -135,8 +140,8 @@ remaining setup steps until configured.
 ## Install
 
 ```bash
-git clone <this-repo> ~/raspi-config
-cd ~/raspi-config
+git clone <this-repo> ~/homelab
+cd ~/homelab
 sudo ./install.sh
 ```
 

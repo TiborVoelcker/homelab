@@ -85,7 +85,7 @@ if [[ ! -e "/proc/sys/net/ipv6/conf/$infra_if/accept_ra" ]]; then
 fi
 
 # accept_ra=2 because a host with forwarding enabled ignores router
-# advertisements otherwise, which would cost the Pi its own default route the
+# advertisements otherwise, which would cost the host its own default route the
 # moment the next line takes effect. The RIO prefix length lets it learn the
 # route back into the Thread mesh.
 cat > /etc/sysctl.d/60-otbr-accept-ra.conf <<EOF
@@ -135,7 +135,7 @@ services:
       OT_INFRA_IF: $infra_if
       OT_THREAD_IF: wpan0
       # Loopback is enough: Home Assistant is host-networked too, so it shares
-      # this one. Only widen it if Home Assistant moves off this Pi - the REST
+      # this one. Only widen it if Home Assistant moves off this host - the REST
       # API is unauthenticated and can re-form the Thread network.
       OT_REST_LISTEN_ADDR: "127.0.0.1"
       OT_REST_LISTEN_PORT: "8081"

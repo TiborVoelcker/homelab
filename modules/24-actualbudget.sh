@@ -26,7 +26,7 @@ else
 fi
 
 # Written every run: the file is ours, so re-writing it is how an edit here
-# reaches the Pi.
+# reaches the host.
 cat > "$APP_DIR/docker-compose.yml" <<EOF
 services:
   actualbudget:

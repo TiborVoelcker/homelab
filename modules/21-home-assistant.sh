@@ -16,7 +16,7 @@ mkdir -p "$APP_DIR" "$DATA/config"
 
 # Written every run rather than guarded like paperless's: that one comes from
 # upstream and must not be re-fetched, this one is ours, so re-writing it is
-# how an edit here reaches the Pi.
+# how an edit here reaches the host.
 cat > "$APP_DIR/docker-compose.yml" <<EOF
 services:
   homeassistant:
@@ -27,7 +27,7 @@ services:
     # through mDNS, SSDP and DHCP traffic, which is broadcast and does not
     # cross a bridge network; privileged + the host's dbus socket is what the
     # Bluetooth and USB (Zigbee/Z-Wave stick) integrations need to see the
-    # hardware. Host networking also means the port is 8123 on the Pi itself,
+    # hardware. Host networking also means the port is 8123 on the host itself,
     # with no port mapping to declare.
     network_mode: host
     privileged: true
@@ -43,7 +43,7 @@ services:
     # which watches container starts, saw nothing. A healthcheck is what makes
     # that visible, and the unhealthy check in homelab-check is what reports
     # it. Mind the backticks: this block is inside an unquoted heredoc.
-    # A cold start on this Pi takes a minute or two - recorder alone logs that
+    # A cold start took a minute or two on the Pi - recorder alone logs that
     # it is taking over 10 seconds - so the start period is generous. Until it
     # expires the state is "starting", which deliberately alerts no one.
     healthcheck:

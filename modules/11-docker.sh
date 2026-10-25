@@ -33,7 +33,7 @@ docker compose version >/dev/null 2>&1 \
 # at 30MB, and the stack as it stands at under 200MB.
 #
 # This file is ours in the same sense as the compose files - written whole, so
-# an edit here reaches the Pi. Anything else that ever needs a daemon-wide
+# an edit here reaches the host. Anything else that ever needs a daemon-wide
 # Docker setting belongs in this block, not in a second writer.
 DAEMON_JSON=/etc/docker/daemon.json
 mkdir -p "$(dirname "$DAEMON_JSON")"

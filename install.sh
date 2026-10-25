@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One command to converge this Pi to the state described by this repo.
+# One command to converge this machine to the state described by this repo.
 # Safe to re-run: every module no-ops when its work is already done.
 set -euo pipefail
 
@@ -13,7 +13,7 @@ if [[ "$(current_role)" == "baseline" ]]; then
 fi
 echo main > "$ROLE_FILE"
 
-header "raspi-homelab provisioning"
+header "homelab provisioning"
 echo
 
 header "installing helper commands"

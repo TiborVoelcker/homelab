@@ -98,14 +98,23 @@ fi
 # The firmware appends entries to BootOrder by itself, so check every run.
 # Not a safety gate (that is BootCurrent, in reset-main.sh) - it keeps an
 # ordinary fall-through boot from landing in the baseline.
+#
+# Also kept out: the "debian" entries this firmware creates by itself, one per
+# ESP the first time it boots from it, which load grubx64.efi directly and
+# skip the shim. With Secure Boot on they cannot start anything, and a
+# rejected image may stop at a prompt nobody is there to answer. They are not
+# deleted: that would only have the firmware create them again.
+mapfile -t strays < <(efibootmgr | awk -F'\t' \
+    'tolower($2) ~ /\\efi\\debian\\grubx64\.efi/ { print substr($1, 5, 4) }')
 order=$(efibootmgr | sed -n 's/^BootOrder: //p')
-new_order=$(tr ',' '\n' <<<"$order" | grep -vix "${entries[0]}" | paste -sd, || true)
+new_order=$(tr ',' '\n' <<<"$order" \
+    | grep -vixF -f <(printf '%s\n' "${entries[0]}" "${strays[@]}") | paste -sd, || true)
 if [[ "$new_order" == "$order" ]]; then
-    skip "$BASELINE_LABEL is not in BootOrder"
+    skip "BootOrder holds neither $BASELINE_LABEL nor shim-less entries"
 else
-    [[ -n "$new_order" ]] || die "BootOrder would be empty without $BASELINE_LABEL - fix it by hand"
+    [[ -n "$new_order" ]] || die "BootOrder would be empty - fix it by hand"
     efibootmgr -o "$new_order" >/dev/null
-    ok "removed $BASELINE_LABEL from BootOrder ($new_order)"
+    ok "BootOrder is now $new_order ($BASELINE_LABEL and shim-less entries removed)"
 fi
 
 sync

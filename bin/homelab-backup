@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Nightly off-site backup of /data, run by homelab-backup.timer.
+# Nightly backup of /data to the internal HDD and off-site, run by
+# homelab-backup.timer.
 #
 # /data is the only home of everything that cannot be rebuilt: Home Assistant's
 # configuration, the Paperless library, the Thread and Matter credentials, the
@@ -69,29 +70,51 @@ done < <(find "$DATA_DIR" -path "$SNAP_DIR" -prune -o \
     -type f \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \) -print)
 
 # ---------- the backup itself ----------
-# The live databases are excluded by extension rather than by path, so this
-# needs no per-service knowledge either.
-restic backup "$DATA_DIR" \
-    --tag homelab \
-    --exclude '*.db'       --exclude '*.db-wal'       --exclude '*.db-shm' \
-    --exclude '*.sqlite'   --exclude '*.sqlite-wal'   --exclude '*.sqlite-shm' \
-    --exclude '*.sqlite3'  --exclude '*.sqlite3-wal'  --exclude '*.sqlite3-shm' \
-    --exclude "$DATA_DIR/paperless/consume"
+# Chained with && rather than relying on set -e, which is off inside a
+# function called from an if.
+backup_to() {
+    # The live databases are excluded by extension rather than by path, so
+    # this needs no per-service knowledge either.
+    restic backup "$DATA_DIR" \
+        --tag homelab \
+        --exclude '*.db'       --exclude '*.db-wal'       --exclude '*.db-shm' \
+        --exclude '*.sqlite'   --exclude '*.sqlite-wal'   --exclude '*.sqlite-shm' \
+        --exclude '*.sqlite3'  --exclude '*.sqlite3-wal'  --exclude '*.sqlite3-shm' \
+        --exclude "$DATA_DIR/paperless/consume" &&
+    # Keeping daily/weekly/monthly is what gives this the one property version
+    # control would have: "what did that automation look like last week".
+    restic forget --tag homelab \
+        --keep-daily 7 --keep-weekly 4 --keep-monthly 12 \
+        --prune &&
+    # Structure only, no re-download of the data: seconds for a repository
+    # this size, and it is the difference between having backups and
+    # believing in them. --with-cache, or check builds a throwaway cache in
+    # /tmp (tmpfs here) and downloads every index and tree pack into it again.
+    restic check --with-cache
+}
 
-# Keeping daily/weekly/monthly is what gives this the one property version
-# control would have: "what did that automation look like last week".
-restic forget --tag homelab \
-    --keep-daily 7 --keep-weekly 4 --keep-monthly 12 \
-    --prune
-
-# Structure only, no re-download of the data: seconds for a repository this
-# size, and it is the difference between having backups and believing in them.
-# --with-cache, or check builds a throwaway cache in /tmp (tmpfs here) and
-# downloads every index and tree pack into it again.
-restic check --with-cache
+# Two copies, same password: the internal HDD first, because it is quick,
+# then Drive, which is the off-site one. Each runs even if the other failed,
+# and either failing fails the run. The HDD counts once 25-backup.sh has put
+# it in fstab - from then on its absence is a fault, not an option.
+BACKUP_DIR=/backup
+repos=()
+grep -q "[[:space:]]${BACKUP_DIR}[[:space:]]" /etc/fstab && repos+=("$BACKUP_DIR/restic")
+repos+=("$RESTIC_REPOSITORY")
+for repo in "${repos[@]}"; do
+    echo "---------- $repo"
+    if [[ "$repo" == "$BACKUP_DIR"/* ]] && ! findmnt -O rw "$BACKUP_DIR" >/dev/null; then
+        echo "error: $BACKUP_DIR is not mounted read-write - no local copy" >&2
+        skipped=1
+    elif ! RESTIC_REPOSITORY=$repo backup_to; then
+        echo "error: backup to $repo failed" >&2
+        skipped=1
+    fi
+done
 
 # Everything else is backed up by now, but the excludes dropped the live copy
-# of any database without a snapshot - so fail the run and leave no stamp.
+# of any database without a snapshot, or a repository was missed - so fail
+# the run and leave no stamp.
 (( ! skipped )) || { echo "backup incomplete: see the errors above" >&2; exit 1; }
 
 mkdir -p "$(dirname "$STAMP")"

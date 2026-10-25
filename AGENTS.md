@@ -85,7 +85,9 @@ prefix built in, so any other bootloader-id leaves it unable to find its stub.
 The two NVRAM entries are told apart by label instead - `homelab` for the
 live system, `homelab-baseline` for the baseline.
 
-The internal HDD is not part of this layout.
+The internal HDD is not part of this layout: it carries one ext4 filesystem
+labelled `homelab-backup`, mounted at `/backup`, which holds the local copy of
+the backup. A reset does not touch it, just like `/data`.
 
 ### BootNext
 
@@ -126,9 +128,9 @@ be bootable.
 | `modules/22-otbr.sh` | OpenThread Border Router. Needs a Thread radio on USB; skips when none is plugged in. |
 | `modules/23-matter-server.sh` | python-matter-server - lets Home Assistant commission Matter (incl. Matter-over-Thread) devices. |
 | `modules/24-actualbudget.sh` | Actual Budget on port 5006, HTTPS with a self-signed cert (it needs a secure context). |
-| `modules/25-backup.sh` | Nightly encrypted off-site backup of `/data` with restic over rclone (Google Drive). Installs the timer; stays off until `/data/homelab/rclone.conf` exists. |
+| `modules/25-backup.sh` | Nightly encrypted backup of `/data` with restic: off-site over rclone (Google Drive), plus a second repository on the internal HDD at `/backup`, found by its label. Installs the timer; stays off until `/data/homelab/rclone.conf` exists. |
 | `bin/homelab-check` | The checks Monit runs. |
-| `bin/homelab-backup` | The nightly backup: `VACUUM INTO` every database on `/data`, then restic. Run by `homelab-backup.timer`. |
+| `bin/homelab-backup` | The nightly backup: `VACUUM INTO` every database on `/data`, then restic into each repository - HDD first, then Drive. Either failing fails the run. Run by `homelab-backup.timer`. |
 | `bin/homelab-forget-data-disk` | Removes the `/data` fstab line, so the next `install.sh` mounts p6 afresh. Only after reformatting the data partition. |
 | `bin/homelab-notify` | Sends an ntfy push; used by Monit, usable by hand. |
 | `bin/homelab-reset` | Arms the reset and reboots into the baseline via `BootNext`. |
@@ -178,8 +180,8 @@ install, which is why it is worth keeping short.
 ## Current status
 
 Everything above is implemented, and the full cycle - install, reset,
-reinstall - was exercised on this machine on 2026-10-25. `MIGRATION.md`
-lists what is still open from the move off the Raspberry Pi.
+reinstall - was exercised on this machine on 2026-10-25, when it took over
+from the Raspberry Pi.
 
 ## Things to watch for when extending this
 

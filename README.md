@@ -25,9 +25,11 @@ cannot be shrunk while it is running, so the installed system cannot make
 room for the baseline itself. `modules/00-storage.sh` only checks the layout,
 and stops `install.sh` if it is wrong.
 
-From any Linux that is not running off the target SSD (here: a Debian rescue
-system on the internal HDD, over SSH), with `debootstrap`, `dosfstools` and
-`efibootmgr` installed. **This erases the whole SSD:**
+From any Linux that is not running off the target SSD, with `debootstrap`,
+`dosfstools` and `efibootmgr` installed. The first install ran from a Debian
+system on the internal HDD, over SSH; that disk is the backup disk now, so
+next time it is a Debian live USB stick, which needs a monitor and keyboard.
+**This erases the whole SSD:**
 
 ```bash
 DISK=/dev/nvme0n1
@@ -134,8 +136,46 @@ sudo rsync -aHAX /mnt/elsewhere/ /data/
 ```
 
 **A separate partition is not a backup.** It makes resets safe, nothing more.
-`modules/25-backup.sh` backs `/data` up off-site every night; it prints its
-remaining setup steps until configured.
+`modules/25-backup.sh` backs `/data` up every night, to Google Drive and to the
+internal HDD; it prints its remaining setup steps until configured.
+
+## The backup disk
+
+The internal HDD holds the local copy of the backup: a restic repository at
+`/backup/restic`, with the same password as the one on Drive. It restores in
+seconds and does not depend on the internet, but it is in the same box, so
+Drive stays the off-site copy. Format it once, by hand - the scripts never
+format anything. **This erases the whole HDD:**
+
+```bash
+sudo wipefs -a /dev/sda
+echo 'label: gpt
+type=linux, name=backup' | sudo sfdisk -q /dev/sda
+sudo mkfs.ext4 -q -e remount-ro -L homelab-backup /dev/sda1
+```
+
+`25-backup.sh` finds it by that label, mounts it at `/backup` and creates the
+repository. Without it only the Drive copy is made; once it is in fstab, a
+missing HDD fails the nightly backup, so Monit reports it.
+
+To restore, from either copy (the Drive one needs no HDD):
+
+```bash
+sudo bash -c 'set -a; source /data/homelab/backup.env; set +a
+  RESTIC_REPOSITORY=/backup/restic restic snapshots'   # drop RESTIC_REPOSITORY=... for Drive
+sudo bash -c 'set -a; source /data/homelab/backup.env; set +a
+  RESTIC_REPOSITORY=/backup/restic restic restore latest --target /var/tmp/restore'
+```
+
+Databases come back as `*.sqlite-snapshot` copies under `snapshots/`, taken
+consistently while the services ran: copy each one over its original path
+(minus the suffix) with the service stopped.
+
+## BIOS
+
+The board runs BIOS R1.19.0 from 2018. Fujitsu's R1.35.0 package is in
+`/data/homelab/bios/`. Flashing it needs a monitor and keyboard: a failed or
+interrupted flash may leave nothing to SSH into.
 
 ## Install
 

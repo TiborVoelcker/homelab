@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Off-site backup of /data with restic.
+# Backup of /data with restic: off-site to Google Drive, plus a second copy on
+# the internal HDD.
 #
 # This is the last line of defence and the only one for some of the data. The
 # repo rebuilds the machine; /data populates it; nothing rebuilds /data. On
@@ -123,6 +124,36 @@ if restic cat config >/dev/null 2>&1; then
 else
     restic init >/dev/null
     ok "initialised restic repository at $repo"
+fi
+
+# ---------- second copy on the internal HDD ----------
+# Restores in seconds, with no API rate limits, and survives Drive being
+# unreachable. Not a replacement for Drive: a copy inside the same box goes
+# down with the box. Same password, so there is still only one to keep. Found
+# by its label, so a reset needs no prompt; formatting it is a manual step
+# (README.md), like every filesystem here.
+BACKUP_DIR=/backup
+LOCAL_REPO=$BACKUP_DIR/restic
+if [[ ! -e /dev/disk/by-label/homelab-backup ]]; then
+    warn "no filesystem labelled homelab-backup - only the Drive copy is made (see README.md)"
+else
+    mkdir -p "$BACKUP_DIR"
+    if grep -q "[[:space:]]${BACKUP_DIR}[[:space:]]" /etc/fstab; then
+        skip "fstab already has $BACKUP_DIR"
+    else
+        # passno 2 and preen, for the same reasons as /data - see 02-data.sh.
+        printf 'UUID=%s %s ext4 defaults,noatime,nofail,x-systemd.device-timeout=30 0 2\n' \
+            "$(uuid_of /dev/disk/by-label/homelab-backup)" "$BACKUP_DIR" >> /etc/fstab
+        systemctl daemon-reload
+        ok "added $BACKUP_DIR to fstab"
+    fi
+    mountpoint -q "$BACKUP_DIR" || mount "$BACKUP_DIR" || die "could not mount $BACKUP_DIR"
+    if [[ -f "$LOCAL_REPO/config" ]]; then
+        skip "local restic repository present at $LOCAL_REPO"
+    else
+        RESTIC_REPOSITORY=$LOCAL_REPO restic init >/dev/null
+        ok "initialised local restic repository at $LOCAL_REPO"
+    fi
 fi
 
 systemctl enable --now homelab-backup.timer >/dev/null

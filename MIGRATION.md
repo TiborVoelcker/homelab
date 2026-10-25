@@ -218,15 +218,32 @@ What differs is how it gets installed, and the firmware.
    both ESPs. Worth stating plainly because the opposite is true of the rescue
    stick we built, and that difference is the most likely reason the stick did
    not come up.
-4. **debootstrap writes no network config.** Pick one stack deliberately
-   (`ifupdown` with `/etc/network/interfaces`, or `systemd-networkd`) and
-   configure `enp1s0f0` before the first boot, or the box comes up unreachable.
-5. **No `fsck.repair=yes`.** The stock Pi cmdline carried it, which is what ran
-   `e2fsck -y` unattended and destroyed `/data` on 2026-10-17. Debian on x86
-   has no such default, so the hazard is genuinely different - but keep
-   `passno=0` and `errors=remount-ro` anyway. The lesson was that unattended
-   repair did the damage, and that has not changed. Rewrite `02-data.sh`'s
-   header so the next reader is not misled about why those settings are there.
+4. **debootstrap writes no network config**, yet still installs `ifupdown`.
+   The choice is `systemd-networkd` (DHCP on `enp1s0f0`, with
+   `systemd-resolved`). Purge `ifupdown` before the baseline is captured, so
+   there is one network stack. debootstrap also skips "either/or"
+   dependencies: `systemd-resolved` needs `dbus` named explicitly.
+5. **fsck: `preen` everywhere, and `/data` is checked again.** The stock Pi
+   cmdline carried `fsck.repair=yes`, which ran `e2fsck -y` unattended and
+   destroyed `/data` on 2026-10-17. That repair mode is one global switch for
+   every filesystem, so on the Pi `/data` could only be protected by not
+   checking it at all (`passno=0`). Debian on x86 has no `fsck.repair=` on
+   the cmdline, which means `preen`: only repairs that are safe without a
+   human, anything worse is refused and reported. So every partition gets a
+   boot check - root `1`, ESP and `/data` `2` - and `/data` keeps `nofail`:
+   damage preen will not touch leaves `/data` unmounted, the Docker guard
+   keeps the services down, and Monit alerts. `errors=remount-ro` stays on
+   everything; it only stops writes, it never repairs. Accepted cost: damage
+   on rootA that preen refuses lands in an emergency shell with no network.
+   Rewrite `02-data.sh` (passno and header) to match.
+6. **Firmware lives in `non-free-firmware`**, which debootstrap leaves out
+   unless asked (`--components=main,non-free-firmware`), and which the rescue
+   OS does not have enabled either. Install two packages from it:
+   - `intel-microcode`: CPU microcode with the security fixes. The BIOS is
+     from 2018, so without this the i3 runs microcode that old.
+   - `firmware-misc-nonfree`: carries `i915/kbl_dmc_ver1_04.bin`. Without it
+     i915 logs "Failed to load DMC firmware ... Disabling runtime power
+     management" on every boot. Harmless headless, but it costs idle power.
 
 ## /data
 
@@ -337,6 +354,13 @@ efibootmgr -n <other-entry> && reboot      # then check BootCurrent, and that Bo
    your key, a user with sudo. ESP-B and rootB stay empty, nothing at
    `/data` yet. Switch `BootOrder` to the new entry only after it has booted
    once via `BootNext` - the rescue entry stays first until then.
+   Done 2026-10-25 up to the first boot: SSD partitioned and formatted
+   (labels `ESP-A`, `rootA`, `ESP-B`, `rootB`, `swap`, `homelab-data`),
+   hostname `homelab`, user `tibor` (key-only, passwordless sudo), NVRAM
+   entry `homelab` (Boot0006) outside `BootOrder`, BootNext set. The rescue
+   HDD still holds `~/docker-compose.env` (Paperless's secret key), the
+   `/data` tarball, and Claude's `~/.claude` - carry them over before the HDD
+   is reused.
 4. Run "Verify first" and record the answers here.
 5. Clone this repo, then port in dependency order: `lib/common.sh` first, then
    `00-storage` as a verifier, then `02-data`, then the deletions, then

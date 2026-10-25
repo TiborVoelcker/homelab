@@ -384,7 +384,9 @@ Answered:
    mounted from p6, empty but for its marker.
    Still to port: `bin/homelab-check` temperature sensor and the Monit
    thresholds (see "Monit recalibration"). `README.md` describes this machine.
-6. Move `/data` across from `homelab-data-2026-10-22.tar.gz`, or restore
+6. ~~Move `/data` across.~~ Done 2026-10-25 from the tarball (all 850 entries,
+   numeric owners kept). Still to do: the restic restore drill. Was: move
+   `/data` across from `homelab-data-2026-10-22.tar.gz`, or restore
    restic snapshot `1b2a34cf`. The tarball is the faster path and was verified
    byte-for-byte; restic is the one that proves the backups work. Do the
    restic restore at least once as a drill.

@@ -22,9 +22,6 @@ is in the commit history. Delete this file once the list below is empty.
    `apt-daily-upgrade.timer` does nothing. Decide whether to install it (a
    kernel update would then land unasked, which the per-root `/boot` layout
    makes safe for the baseline) or to rely on running `install.sh`.
-4. **Rename the repo.** "raspi-config" stopped being true. The docs already
-   call it `homelab`; renaming on GitHub keeps a redirect from the old URL.
-   Then update the clone path on this machine.
-5. **BIOS** is R1.19.0 from 2018; Fujitsu's R1.35.0 package was downloaded to
+4. **BIOS** is R1.19.0 from 2018; Fujitsu's R1.35.0 package was downloaded to
    the rescue HDD. Optional, and the riskiest thing that can be done to a
    headless box: a failed flash may leave nothing to SSH into.

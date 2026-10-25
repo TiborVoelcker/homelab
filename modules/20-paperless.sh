@@ -2,7 +2,7 @@
 # Example service module. The shape to copy for the rest of the stack:
 #   1. directories on the DATA partition, so a reset preserves them
 #   2. config from upstream, fetched once
-#   3. secrets generated once, guarded
+#   3. secrets generated once, guarded, and kept on the DATA partition too
 #   4. `docker compose up -d` - already idempotent, needs no guard
 set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
@@ -27,17 +27,31 @@ else
 fi
 
 # Generate the secret exactly once - regenerating it would orphan existing data.
-if [[ -f "$APP_DIR/docker-compose.env" ]]; then
+# It lives on /data, because a reset wipes /opt and this module would then
+# generate a new one; the upstream compose file reads it from $APP_DIR, so
+# that gets a symlink.
+ENV_FILE="$DATA/docker-compose.env"
+if [[ -f "$ENV_FILE" ]]; then
     skip "env file present"
+elif [[ -f "$APP_DIR/docker-compose.env" && ! -L "$APP_DIR/docker-compose.env" ]]; then
+    mv "$APP_DIR/docker-compose.env" "$ENV_FILE"
+    ok "moved env file to $ENV_FILE"
 else
-    cat > "$APP_DIR/docker-compose.env" <<EOF
+    cat > "$ENV_FILE" <<EOF
 PAPERLESS_SECRET_KEY=$(openssl rand -hex 32)
 PAPERLESS_TIME_ZONE=Europe/Berlin
 PAPERLESS_OCR_LANGUAGE=deu+eng
 EOF
-    chmod 600 "$APP_DIR/docker-compose.env"
+    chmod 600 "$ENV_FILE"
     ok "generated env file"
 fi
+# A regular file here next to the one on /data means two secrets, and only a
+# human can tell which one the data was made with.
+if [[ -f "$APP_DIR/docker-compose.env" && ! -L "$APP_DIR/docker-compose.env" ]] \
+    && ! cmp -s "$APP_DIR/docker-compose.env" "$ENV_FILE"; then
+    die "$APP_DIR/docker-compose.env differs from $ENV_FILE - keep the right one on /data, delete the other"
+fi
+ln -sfn "$ENV_FILE" "$APP_DIR/docker-compose.env"
 
 # Memory caps, as a compose override rather than an edit to the file above:
 # that one comes from upstream and is fetched once, so editing it would be

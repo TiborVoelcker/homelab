@@ -132,7 +132,7 @@ be bootable.
 | `bin/homelab-check` | The checks Monit runs. |
 | `bin/homelab-backup` | The nightly backup: `VACUUM INTO` every database on `/data`, then restic into each repository - HDD first, then Drive. Either failing fails the run. Run by `homelab-backup.timer`. |
 | `bin/homelab-forget-data-disk` | Removes the `/data` fstab line, so the next `install.sh` mounts p6 afresh. Only after reformatting the data partition. |
-| `bin/homelab-notify` | Sends an ntfy push; used by Monit, usable by hand. |
+| `bin/homelab-notify` | Sends an ntfy push; used by Monit, usable by hand. Turns Monit's events into a plain-language title per check, with the check's own output as the message. |
 | `bin/homelab-reset` | Arms the reset and reboots into the baseline via `BootNext`. |
 | `bin/homelab-status` | Read-only snapshot: role, boot variables, baseline entry, partitions, `/data`, baseline age, armed? |
 | `reset/reset-main.sh` | Installed into the baseline as `/usr/local/sbin/homelab-reset-main`. Overwrites rootA with itself and makes it bootable again, behind three gates. |

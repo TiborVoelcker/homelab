@@ -2,11 +2,65 @@
 # Push a notification to the phone via ntfy.
 #   homelab-notify "title" "message"
 # Monit calls it with no arguments and passes the event in MONIT_* variables.
+# Those are turned into a title that says in words what happened, with the
+# check's own output (bin/homelab-check) as the message. Monit's wording -
+# "status failed (1) -- ..." - says how it found out, not what is wrong.
 set -euo pipefail
 source /etc/homelab/notify.env
 
-title="${1:-${MONIT_SERVICE:-homelab}: ${MONIT_EVENT:-}}"
-msg="${2:-${MONIT_DESCRIPTION:-}}"
+tags=""
+if (( $# )); then
+    title=$1
+    msg=${2:-}
+else
+    desc=${MONIT_DESCRIPTION:-}
+    # Every check notifies on failure and again on recovery ("else if
+    # succeeded" in 13-monit.sh), and only the recovery says "succeeded".
+    if [[ "${MONIT_EVENT:-} $desc" == *succeeded* ]]; then
+        ok=1 tags=white_check_mark
+    else
+        ok=0 tags=warning
+    fi
+    # Program checks arrive as "status failed (1) -- <output>": keep the output.
+    # Anything else Monit says (it could not run the check, say) stays whole.
+    msg=$desc
+    [[ "$desc" == status* ]] && msg=${desc#* -- }
+    msg=${msg%"${msg##*[![:space:]]}"}
+    host=$(hostname)
+    # Resource checks carry a percentage, e.g. "space usage 86.0% matches
+    # resource limit [space usage > 85.0%]": the first one is the current value.
+    pct=$(grep -oE '[0-9]+(\.[0-9]+)?%' <<<"$desc" | head -1 | sed 's/\.[0-9]*%/%/' || true)
+    pick() { if (( ok )); then title=$2; else title=$1; fi; }
+
+    case "${MONIT_SERVICE:-}" in
+        data)      pick "/data has gone read-only" "/data is writable again" ;;
+        # Named when the check names exactly one container (see its output).
+        restarts)  pick "A container kept crashing" "No more crash loops"
+                   [[ "$msg" =~ ^([^ ]+)\ restarted ]] && title="${BASH_REMATCH[1]} kept crashing" ;;
+        docker)    pick "Docker is down" "Docker is running again" ;;
+        unhealthy) pick "A service is unhealthy" "All services are healthy again"
+                   [[ "$msg" =~ ^([^ ]+)\ is\ failing ]] && title="${BASH_REMATCH[1]} is unhealthy" ;;
+        backup)    pick "Backup problem" "Backup succeeded" ;;
+        kmem)      pick "Kernel memory is leaking" "Kernel memory is back to normal" ;;
+        temp)      pick "${host^} is running hot" "${host^} has cooled down" ;;
+        rootfs)    pick "System disk is filling up" "System disk has room again"
+                   msg="${pct:-?} full" ;;
+        datafs)    pick "/data is filling up" "/data has room again"
+                   msg="${pct:-?} full" ;;
+        "$host")
+            # check system: memory and swap share the host's name.
+            if [[ "$desc" == swap* ]]; then
+                pick "Swap is filling up" "Swap use is back to normal"
+                msg="${pct:-?} of swap in use"
+            else
+                pick "Memory is running low" "Memory use is back to normal"
+                msg="${pct:-?} of memory in use"
+            fi ;;
+        # Anything not listed above still arrives, in Monit's own words.
+        *)         title="${MONIT_SERVICE:-monit}: ${MONIT_EVENT:-event}"
+                   msg=$desc ;;
+    esac
+fi
 
 curl -fsS -m 10 --retry 3 -o /dev/null \
-    -H "Title: $(hostname) - $title" -d "$msg" "$NTFY_URL"
+    -H "Title: $title" ${tags:+-H "Tags: $tags"} -d "$msg" "$NTFY_URL"

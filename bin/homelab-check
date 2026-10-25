@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Checks run by Monit (modules/13-monit.sh). Exit 0 = fine, 1 = problem; the
-# output becomes the notification text.
+# output becomes the notification text, so it is written as a sentence for
+# whoever reads it on a phone, in both states: a recovery shows the OK text.
 set -euo pipefail
 DATA_DIR=/data
 
@@ -19,14 +20,14 @@ data)
     # drop-in from 02-data.sh keeps it from starting again until /data is
     # read-write.
     if findmnt -O rw "$DATA_DIR" >/dev/null; then
-        echo "$DATA_DIR is mounted read-write"
+        echo "$DATA_DIR is mounted and writable."
         exit 0
     fi
     if systemctl is-active -q docker.socket || systemctl is-active -q docker.service; then
         systemctl stop docker.socket docker.service
-        echo "$DATA_DIR is not writable - stopped Docker. Repair with fsck, remount, then: systemctl start docker"
+        echo "$DATA_DIR is not writable, so Docker was stopped to keep the containers from crash-looping. Repair it with fsck and remount it, then: systemctl start docker"
     else
-        echo "$DATA_DIR is not writable"
+        echo "$DATA_DIR is not writable, and Docker is already stopped."
     fi
     exit 1
     ;;
@@ -42,10 +43,10 @@ restarts)
         # Gone already (removed by hand): nothing left to stop.
         name=$(docker inspect -f '{{.Name}}' "$id" 2>/dev/null) || continue
         docker stop "$id" >/dev/null
-        echo "${name#/} was crash-looping - stopped it, start it again by hand once fixed"
+        echo "${name#/} restarted 5 times in 10 minutes, so it was stopped. Start it again by hand once it is fixed."
         found=1
     done
-    (( found )) || echo "no crash loops"
+    (( found )) || echo "No container is crash-looping."
     (( ! found ))
     ;;
 kmem)
@@ -53,25 +54,29 @@ kmem)
     # ~135MB here with every service up; the crash-loop leak above is what
     # drives it up, and it reached ~570MB on the Pi.
     kb=$(awk '/^SUnreclaim:/ { print $2 }' /proc/meminfo)
-    echo "unreclaimable kernel memory: $(( kb / 1024 ))MB"
-    (( kb < 400 * 1024 ))
+    if (( kb < 400 * 1024 )); then
+        echo "Unreclaimable kernel memory is at $(( kb / 1024 )) MB."
+        exit 0
+    fi
+    echo "Unreclaimable kernel memory is at $(( kb / 1024 )) MB (alert above 400 MB). A crash-looping container is the usual cause."
+    exit 1
     ;;
 temp)
     # The CPU package sensor, found by type: zone numbers are not stable, and
     # thermal_zone0 is the chipset here. The i3-7100 throttles at 100°C and
     # sat at 70°C with one thread busy in this small case.
     zone=$(grep -lx x86_pkg_temp /sys/class/thermal/thermal_zone*/type | head -1 || true)
-    [[ -n "$zone" ]] || { echo "no x86_pkg_temp thermal zone - cannot read the CPU temperature"; exit 1; }
+    [[ -n "$zone" ]] || { echo "Cannot read the CPU temperature: there is no x86_pkg_temp thermal zone."; exit 1; }
     t=$(( $(cat "${zone%/type}/temp") / 1000 ))
-    echo "CPU temperature: ${t}°C"
+    echo "The CPU is at ${t}°C (alert from 90°C, it throttles at 100°C)."
     (( t < 90 ))
     ;;
 docker)
     if systemctl is-active -q docker; then
-        echo "docker is running"
+        echo "Docker is running."
         exit 0
     fi
-    echo "docker is not running"
+    echo "Docker is not running, so none of the services are up."
     exit 1
     ;;
 unhealthy)
@@ -95,21 +100,27 @@ unhealthy)
             # starting = still inside its start_period, not yet a verdict.
             healthy|starting) well=$(( well + 1 )) ;;
             none)             unprobed+=("$name") ;;
-            *)                unhealthy+=("$name ($state)") ;;
+            # The only other state Docker has is "unhealthy".
+            *)                unhealthy+=("$name") ;;
         esac
     done < <(docker ps --format '{{.Names}}')
 
-    if (( ${#unhealthy[@]} > 0 )); then
-        echo "unhealthy: ${unhealthy[*]}"
+    # The first words matter: homelab-notify turns "<name> is failing" into
+    # the title.
+    if (( ${#unhealthy[@]} == 1 )); then
+        echo "${unhealthy[0]} is failing its healthcheck. Its log: docker logs ${unhealthy[0]}"
+        exit 1
+    elif (( ${#unhealthy[@]} > 1 )); then
+        echo "Failing their healthchecks: ${unhealthy[*]}. Logs: docker logs <name>"
         exit 1
     fi
 
     # A container with no probe is an unwatched service, worth saying out loud
     # without paging anyone: ad-hoc `docker run`s land here too.
     if (( ${#unprobed[@]} > 0 )); then
-        echo "$well healthy; no healthcheck: ${unprobed[*]}"
+        echo "$well containers are healthy. Not watched, because they have no healthcheck: ${unprobed[*]}"
     else
-        echo "$well containers healthy"
+        echo "All $well containers are healthy."
     fi
     exit 0
     ;;
@@ -124,22 +135,28 @@ backup)
     STAMP=/var/lib/homelab/backup-stamp
     # 25-backup.sh keeps the timer off until the backup is set up.
     if ! systemctl is-enabled -q homelab-backup.timer; then
-        echo "backup not set up yet - see modules/25-backup.sh"
+        echo "Backups are not set up yet - see modules/25-backup.sh."
         exit 0
     fi
     if systemctl is-failed -q homelab-backup.service; then
-        echo "last backup run failed - see journalctl -u homelab-backup"
+        echo "The last backup run failed. Details: journalctl -u homelab-backup"
         exit 1
     fi
     if [[ ! -f "$STAMP" ]]; then
-        echo "no backup has ever completed"
+        echo "No backup has ever completed."
         exit 1
     fi
     hours=$(( ( $(date +%s) - $(stat -c %Y "$STAMP") ) / 3600 ))
-    echo "last backup: ${hours}h ago"
     # Nightly, plus up to 30min of RandomizedDelaySec: 36h means a night was
     # missed, not that one ran late.
-    (( hours < 36 ))
+    if (( hours < 36 )); then
+        # The recovery message lands right after a run, so its age would
+        # always read 0h - when it finished says more.
+        echo "The last backup finished $(date -r "$STAMP" '+%a %d %b, %H:%M') and was verified."
+        exit 0
+    fi
+    echo "No backup has finished for $hours hours - the last one was $(date -r "$STAMP" '+%a %d %b, %H:%M')."
+    exit 1
     ;;
 *)
     echo "usage: homelab-check data|restarts|kmem|temp|docker|unhealthy|backup" >&2

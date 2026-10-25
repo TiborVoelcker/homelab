@@ -334,20 +334,18 @@ target):
 
 ## Verify first
 
-Before writing the boot code:
+Answered:
 
-```
-# BootNext really is one-shot on this firmware. Test with an entry that
-# boots (e.g. a second entry pointing at the rescue shim), never with one
-# Secure Boot would reject: the firmware may stop at a warning that needs a
-# keypress, and there is no display.
-efibootmgr -v                              # note BootOrder and BootCurrent
-efibootmgr -n <other-entry> && reboot      # then check BootCurrent, and that BootNext is gone
-# and that an entry absent from BootOrder is genuinely not booted by accident
-
-# where Debian's signed GRUB looks for its stub grub.cfg - decides whether
-# ESP-B can use bootloader-id "homelab-baseline" (see "Layout")
-```
+- **BootNext is one-shot** on this firmware - confirmed 2026-10-25, see
+  "tryboot -> UEFI BootNext".
+- **Debian's signed GRUB has the prefix `/EFI/debian` built in** (it is the
+  only `/EFI/` path in `grubx64.efi.signed`). So ESP-B is installed with
+  `--bootloader-id=debian --no-nvram`, and its NVRAM entry
+  `homelab-baseline` is made by hand (`efibootmgr -C`, which also keeps it
+  out of `BootOrder`). Done in `01-create-baseline.sh`.
+- **An entry absent from `BootOrder` can still be booted by fall-through**,
+  because the firmware edits `BootOrder` itself. Not tested further: gate 2
+  checks `BootCurrent` instead, so it does not matter.
 
 ## Provisioning order
 
@@ -375,13 +373,22 @@ efibootmgr -n <other-entry> && reboot      # then check BootCurrent, and that Bo
    role file, reset machinery, GRUB on ESP-B, NVRAM entry - and must **not**
    recapture from rootA, which by then holds Claude Code and the handover
    files.
-4. Run "Verify first" and record the answers here.
-5. Clone this repo, then port in dependency order: `lib/common.sh` first, then
-   `00-storage` as a verifier, then `02-data`, then the deletions, then
-   `01-create-baseline` and `reset/`, which are the real work.
+4. ~~Run "Verify first".~~ Done 2026-10-25.
+5. ~~Port the boot and storage layer.~~ Done 2026-10-25: `lib/common.sh`,
+   `00-storage` (verifier), `01-create-baseline`, `02-data`, `reset/`,
+   `bin/homelab-reset`, `bin/homelab-status`; `04`, `05`, `08`, `09`, `10`
+   deleted. `01` and `02` have run: rootB is stamped
+   `2026-10-25T07:45:52+01:00` (the time of the hand copy; the stamp was
+   written by hand so `01` would not recapture), ESP-B boots rootB, NVRAM
+   entry `homelab-baseline` is Boot0001, outside `BootOrder`. `/data` is
+   mounted from p6, empty but for its marker.
+   Still to port: `bin/homelab-check` temperature sensor and the Monit
+   thresholds (see "Monit recalibration"). `README.md` describes this machine.
 6. Move `/data` across from `homelab-data-2026-10-22.tar.gz`, or restore
    restic snapshot `1b2a34cf`. The tarball is the faster path and was verified
    byte-for-byte; restic is the one that proves the backups work. Do the
    restic restore at least once as a drill.
 7. Exercise the reset once, before trusting it, on a system that has nothing to
-   lose yet.
+   lose yet. A reset wipes all of rootA, `/home` included: first move
+   `~/docker-compose.env` and the tarball to `/data`, push the repo, and expect
+   to log Claude Code in again (and answer its folder-trust prompt once).

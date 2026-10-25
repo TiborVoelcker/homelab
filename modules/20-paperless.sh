@@ -54,8 +54,8 @@ fi
 # it. 768M leaves normal OCR plenty of room while still bounding the worst
 # case; the broker is a small key-value store and never needs much.
 #
-# This is only enforceable because modules/10-cgroups.sh turned on the memory
-# controller - without it Docker ignores these silently.
+# Enforceable because the kernel has the cgroup memory controller on -
+# without it Docker ignores these silently.
 # The override also carries the volume paths, and that part is not a tuning
 # choice - it is what makes the first line of this file's header true.
 #

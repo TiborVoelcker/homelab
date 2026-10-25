@@ -1,111 +1,160 @@
 # raspi-homelab
 
-Convergent, script-driven provisioning for my Raspberry Pi homelab, plus a
-self-hosted "reset button": re-image the card without taking it out of the Pi.
-A pristine copy of the flashed OS lives on spare SD card space and can be put
-back at any time - no second computer, no card reader, just a reboot. Service
-data lives on a separate external disk, so a reset never touches it.
+Convergent, script-driven provisioning for my homelab - a headless Fujitsu
+ESPRIMO Q556/2 (x86, UEFI) that took over from a Raspberry Pi, hence the
+name - plus a self-hosted "reset button": a wipe-and-reinstall without a USB
+stick, a display or a second computer, just a reboot. A pristine copy of the
+installed OS lives on its own partitions and can be put back at any time.
+Service data lives on a separate partition, so a reset never touches it.
 
-`install.sh` is the single source of truth for what this Pi should look like.
-It runs small idempotent modules and is safe to re-run. Early on it captures a
-**baseline** - the system exactly as it came off the SD card image - onto its
-own pair of partitions, and never touches it again.
+`install.sh` is the single source of truth for what this machine should look
+like. It runs small idempotent modules and is safe to re-run. Early on it
+finishes a **baseline** - the system exactly as it was installed - on its own
+pair of partitions, and never touches it again.
 
-`homelab-reset` puts that baseline back. The result is equivalent to
-re-flashing the card, so recovery is always the same two steps: reset, then
-re-run `install.sh`.
+`homelab-reset` puts that baseline back. The result is equivalent to a fresh
+install, so recovery is always the same two steps: reset, then re-run
+`install.sh`.
 
 See `AGENTS.md` for how it works underneath.
 
-## Before first boot - the one manual step
+## Fresh install - the one manual step
 
-The baseline partitions are carved from unallocated space at the end of the
-card. ext4 can be grown online but never shrunk, so if Raspberry Pi OS
-auto-expands the root partition on first boot that space is gone for good.
+The partition layout has to exist before the OS does: the root filesystem
+cannot be shrunk while it is running, so the installed system cannot make
+room for the baseline itself. `modules/00-storage.sh` only checks the layout,
+and stops `install.sh` if it is wrong.
 
-Flash with Raspberry Pi Imager as usual (customisation is fine), then
-**before the first boot** mount the small FAT partition on your laptop and
-delete the `resize` token from `cmdline.txt`:
-
-```
-console=serial0,115200 console=tty1 root=PARTUUID=041bba91-02 rootfstype=ext4 fsck.repair=yes rootwait resize cfg80211.ieee80211_regdom=DE
-```
-
-Leave the rest of the line alone - anything baked into it, like the
-`cfg80211.ieee80211_regdom=DE` above, is a real setting and must stay. Imager's
-own customisation is applied through `custom.toml` and keeps working. Check
-with `lsblk` afterwards that `p2` is roughly image-sized rather than
-card-sized.
-
-If you forget, `install.sh` refuses to touch the partition table and tells you
-to re-image rather than improvising.
-
-## The data disk
-
-Format it yourself first - the scripts never format anything:
+From any Linux that is not running off the target SSD (here: a Debian rescue
+system on the internal HDD, over SSH), with `debootstrap`, `dosfstools` and
+`efibootmgr` installed. **This erases the whole SSD:**
 
 ```bash
-sudo mkfs.ext4 -e remount-ro -L homelab-data /dev/sdXN
+DISK=/dev/nvme0n1
+sudo wipefs -a "$DISK"
+sudo sfdisk -q "$DISK" <<'EOF'
+label: gpt
+size=512MiB, type=uefi,   name=ESP-A
+size=60GiB,  type=linux,  name=rootA
+size=512MiB, type=uefi,   name=ESP-B
+size=20GiB,  type=linux,  name=rootB
+size=4GiB,   type=swap,   name=swap
+             type=linux,  name=data
+EOF
+sudo udevadm settle
+
+sudo mkfs.vfat -F 32 -n ESP-A "${DISK}p1"
+sudo mkfs.ext4 -q -L rootA     "${DISK}p2"
+sudo mkfs.vfat -F 32 -n ESP-B "${DISK}p3"
+sudo mkfs.ext4 -q -L rootB     "${DISK}p4"
+sudo mkswap -q -L swap         "${DISK}p5"
+sudo mkfs.ext4 -q -e remount-ro -L homelab-data "${DISK}p6"
 ```
 
-**ext4 specifically.** exFAT and NTFS cannot store Unix ownership, which
-container volumes need.
+The `name=` values are the GPT partition labels `00-storage.sh` checks; the
+partition numbers are what `lib/common.sh` relies on, so keep the order.
+`/data` is ext4 specifically: exFAT and NTFS cannot store Unix ownership,
+which container volumes need.
 
-`02-data.sh` adds an fstab entry by UUID with `nofail`, so the Pi still boots
-without the disk, and installs a systemd drop-in so Docker refuses to start
-unless `/data` is mounted *and* carries its marker file. Without that guard an
-absent disk means bind mounts silently create empty directories under `/data`;
-Paperless finds no database, concludes it is a fresh install, and initialises
-one on the SD card while your real documents sit untouched on the unmounted
-disk.
+Then install Debian 13 into rootA:
 
-To replace the disk, copy its contents onto the new one *before* running
-`install.sh` - otherwise the services start fresh on an empty disk:
+```bash
+sudo mkdir -p /mnt/rootA && sudo mount "${DISK}p2" /mnt/rootA
+sudo debootstrap --arch=amd64 --components=main,non-free-firmware \
+  --include=linux-image-amd64,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,efibootmgr,openssh-server,sudo,dbus,systemd-resolved,intel-microcode,firmware-misc-nonfree,locales,ca-certificates,curl,git,rsync \
+  trixie /mnt/rootA https://deb.debian.org/debian
+```
+
+and finish it in a chroot (with `/dev`, `/proc` and `/sys` bind-mounted, and
+ESP-A at `/mnt/rootA/boot/efi`):
+
+- `/etc/fstab` by filesystem UUID: rootA at `/` (`errors=remount-ro`, pass
+  `1`), ESP-A at `/boot/efi` (`umask=0077`, pass `2`), the swap partition.
+  No `/data` line - `02-data.sh` adds it.
+- `/etc/hostname`, and `systemd-networkd` with DHCP on the NIC
+  (`/etc/systemd/network/20-wired.network`). Purge `ifupdown`, which
+  debootstrap installs anyway, so there is one network stack.
+- A user in group `sudo` with your SSH key in `~/.ssh/authorized_keys`.
+- `update-grub`, then `grub-install --target=x86_64-efi
+  --efi-directory=/boot/efi --bootloader-id=debian --uefi-secure-boot
+  --no-nvram`, and outside the chroot `efibootmgr -C --disk "$DISK" --part 1
+  --label homelab --loader '\EFI\debian\shimx64.efi'`. Secure Boot can stay
+  on: the shim is Microsoft-signed.
+
+Boot it once with `sudo efibootmgr -n <entry>`. BootNext is one-shot, so if it
+fails to come up the next reboot lands back on the rescue system. Only once it
+has booted, put it first with `efibootmgr -o`.
+
+Then take the baseline's content **before anything else touches rootA** -
+from the rescue system, with rootA unmounted:
+
+```bash
+sudo mount "${DISK}p2" /mnt/rootA && sudo mkdir -p /mnt/rootB && sudo mount "${DISK}p4" /mnt/rootB
+sudo rsync -aHAXx --numeric-ids --delete /mnt/rootA/ /mnt/rootB/
+date -Is | sudo tee /mnt/rootB/etc/homelab-baseline
+sudo umount /mnt/rootA /mnt/rootB
+```
+
+Writing the stamp tells `01-create-baseline.sh` that the content is already
+there, so it only makes it bootable instead of copying the running system.
+Without the stamp it captures rootA as it is when `install.sh` first runs,
+which is just as good as long as that is straight after the first boot.
+
+## The data partition
+
+`02-data.sh` mounts p6 at `/data` by UUID with `nofail`, so the system still
+boots without it, and installs a systemd drop-in so Docker refuses to start
+unless `/data` is mounted, writable *and* carries its marker file. Without
+that guard an unmounted `/data` means bind mounts silently create empty
+directories on rootA; Paperless finds no database, concludes it is a fresh
+install, and initialises one there while your real documents sit untouched on
+the unmounted partition - and the next reset wipes the impostor along with
+whatever was written to it.
+
+`/data` is checked at boot in fsck's preen mode, which makes only the repairs
+that are safe without a human. Damage it refuses leaves `/data` unmounted,
+Docker down and Monit alerting; `02-data.sh`'s header has the details.
+
+To reformat it, copy its contents somewhere *before* running `install.sh` -
+otherwise the services start fresh on an empty filesystem:
 
 ```bash
 sudo systemctl stop docker.socket docker.service
-sudo rsync -aHAX /data/ /mnt/new/      # new disk mounted at /mnt/new
-sudo umount /data /mnt/new
+sudo rsync -aHAX /data/ /mnt/elsewhere/
+sudo umount /data
+sudo mkfs.ext4 -e remount-ro -L homelab-data /dev/nvme0n1p6
 sudo homelab-forget-data-disk
-sudo ./install.sh                      # pick the new disk
+sudo ./install.sh                      # mounts the new filesystem
+sudo rsync -aHAX /mnt/elsewhere/ /data/
 ```
 
-Hardware notes:
-
-- **SSD over spinning disk.** A bus-powered HDD can exceed the Pi's USB budget
-  and drop out under load. Otherwise use a powered hub.
-- **Check your USB-SATA bridge.** Some enclosures misbehave with UAS on the Pi
-  and can corrupt data. If yours is on a known-bad list, apply the matching
-  `usb-storage.quirks` workaround in `cmdline.txt`.
-- **A separate disk is not a backup.** It protects against SD card failure and
-  makes resets safe, nothing more. `modules/25-backup.sh` backs `/data` up
-  off-site every night; it prints its remaining setup steps until configured.
+**A separate partition is not a backup.** It makes resets safe, nothing more.
+`modules/25-backup.sh` backs `/data` up off-site every night; it prints its
+remaining setup steps until configured.
 
 ## Install
 
 ```bash
-git clone <this-repo> ~/raspi-homelab
-cd ~/raspi-homelab
+git clone <this-repo> ~/raspi-config
+cd ~/raspi-config
 sudo ./install.sh
 ```
 
-**Run it early.** `01-create-baseline.sh` captures the baseline from whatever
-state the system is in at that moment, and never recaptures. A freshly flashed
-card gives you a clean baseline; a Pi you have been using for six months bakes
-those six months in permanently.
+**Run it early** if rootB has no stamp yet. `01-create-baseline.sh` then
+captures the baseline from whatever state the system is in at that moment,
+and never recaptures. A fresh install gives you a clean baseline; a system you
+have been using for six months bakes those six months in permanently.
 
 Re-run any time. Every module no-ops where its work is already done, so adding
 a module and re-running only does the new work.
 
-Before trusting any of it: after the first install do a plain `sudo reboot` and
-confirm you land back on the live system, which proves the tryboot fail-safe on
-your hardware. Only then try a real reset, with a throwaway change in place to
-check it actually disappears.
+Before trusting any of it: try a real reset with a throwaway change in place,
+and check it actually disappears.
 
 ## Day to day
 
 ```bash
-sudo homelab-status          # partitions, data disk, baseline age, armed?
+sudo homelab-status          # boot entries, partitions, /data, baseline age, armed?
 sudo homelab-reset           # wipe live, overwrite with baseline
 ```
 
@@ -119,14 +168,10 @@ sudo ./install.sh            # rebuilds the homelab on top
 `homelab-reset` shows when the baseline was captured and asks for confirmation
 before it arms anything. It refuses outright if there is no baseline.
 
-After a reset, `02-data.sh` asks you to pick the data disk again - the reset
-system has no `/data` fstab entry, just like a freshly flashed card. Your
-documents are untouched on the disk; only the fstab line is rebuilt. Set
-`HOMELAB_DATA_UUID` to skip the prompt:
-
-```bash
-sudo HOMELAB_DATA_UUID=<uuid> ./install.sh
-```
+A reset wipes **all** of rootA, `/home` included: your clone of this repo,
+Claude Code's login, anything in your home directory. Push the repo first and
+keep anything else you need on `/data`. After the reset, clone the repo again
+and run `install.sh`; `02-data.sh` re-adds the `/data` fstab line by itself.
 
 ### Watching a reset
 
@@ -134,31 +179,33 @@ The baseline keeps the live system's hostname, address and SSH host keys, so
 you can log in while it works:
 
 ```bash
-sudo tail -f /boot/firmware/homelab-reset.log
+sudo tail -f /boot/efi/homelab-reset.log
 ```
 
 The rootfs copy reports progress, so that line moves. Your session drops when
 it finishes and reboots - that is how you know it is done.
 
-Afterwards the log is on bootB, which the live system does not mount:
+Afterwards the log is on ESP-B, which the live system does not mount:
 
 ```bash
-sudo mount /dev/mmcblk0p3 /mnt && cat /mnt/homelab-reset.log
+sudo mount /dev/nvme0n1p3 /mnt && sudo cat /mnt/homelab-reset.log; sudo umount /mnt
 ```
 
 The reset before it is kept alongside as `homelab-reset.log.prev`. These are
 the first place to look if a reset did not do what you expected.
 
-To disarm by hand - say a reset failed partway and you want to stop it
-retrying - remove the marker from that same partition:
+If the baseline fails to start, BootNext is already used up, so the next
+reboot lands on the live system untouched. To disarm by hand - say a reset
+failed partway and you do not want the next baseline boot to retry - remove
+the marker from that same partition:
 
 ```bash
-sudo mount /dev/mmcblk0p3 /mnt && sudo rm /mnt/homelab-reset.arm && sudo umount /mnt
+sudo mount /dev/nvme0n1p3 /mnt && sudo rm /mnt/homelab-reset.arm && sudo umount /mnt
 ```
 
 To look at the baseline, mount `p4` from the live system rather than booting
-it. Booting it directly is safe - without an arm marker the reset service exits
-immediately.
+it. Booting it directly is safe - unless it came up through its own boot entry
+with an arm marker present, the reset service exits immediately.
 
 ### Recapturing the baseline
 
@@ -167,11 +214,11 @@ Debian major release upgrade it can be old enough that its apt sources no
 longer resolve - at which point a reset lands you somewhere `install.sh` cannot
 build on.
 
-Delete the stamp and re-run from a system as close to freshly-flashed as you
+Delete the stamp and re-run from a system as close to a fresh install as you
 can manage; whatever is live at that moment becomes the new baseline:
 
 ```bash
-sudo mount /dev/mmcblk0p4 /mnt
+sudo mount /dev/nvme0n1p4 /mnt
 sudo rm /mnt/etc/homelab-baseline /mnt/etc/homelab-role
 sudo umount /mnt
 sudo ./install.sh
@@ -183,13 +230,13 @@ sudo ./install.sh
 the reset scope and gets rolled back. `20-paperless.sh` shows the split: config
 in `/opt`, state in `/data`.
 
-**A reset goes all the way back to the flashed image**, not to yesterday. If
+**A reset goes all the way back to the fresh install**, not to yesterday. If
 you want "the state I had last Tuesday", this is the wrong tool - back up
 `/data` and keep your changes in `install.sh`.
 
-**Keep one physical spare.** This protects against a broken system, not dead
-hardware. A second SD card with a known-good image in a drawer is the actual
-disaster recovery answer.
+**This protects against a broken system, not dead hardware.** A dead SSD takes
+the baseline and `/data` with it; the off-site backup is the disaster recovery
+answer.
 
 ## Adding a service
 
@@ -209,5 +256,5 @@ Copy `modules/20-paperless.sh`:
 Most install instructions paste in nearly verbatim. Only lines that would be
 destructive to repeat need a guard.
 
-Not a Docker container? Add its unit to the `Upholds=` line in
-`modules/02-data.sh` too, or it won't come back after a `/data` drop.
+Not a Docker container? Give its unit `RequiresMountsFor=/data`, the same
+guard `02-data.sh` gives Docker.

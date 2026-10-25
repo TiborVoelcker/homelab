@@ -1,9 +1,9 @@
 [Unit]
 Description=Reset the live system to the pristine baseline, if armed
-# A cheap first pass on the arm marker, which lives on this system's own boot
-# partition (bootB). reset-main.sh re-checks it along with the other gates.
+# A cheap first pass on the arm marker, which lives on this system's own ESP
+# (ESP-B). reset-main.sh re-checks it along with the other gates.
 After=local-fs.target
-ConditionPathExists=/boot/firmware/homelab-reset.arm
+ConditionPathExists=/boot/efi/homelab-reset.arm
 
 [Service]
 Type=oneshot

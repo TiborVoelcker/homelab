@@ -16,15 +16,15 @@ data)
     # A read-only /data makes containers crash-loop, and every container start
     # leaks a little kernel memory: ~6000 restarts once added up to ~570MB and
     # got the Pi OOM-killed for days. Stopping Docker ends the loop; the
-    # drop-in from 02-data.sh stops Upholds= from starting it again until
-    # /data is read-write.
+    # drop-in from 02-data.sh keeps it from starting again until /data is
+    # read-write.
     if findmnt -O rw "$DATA_DIR" >/dev/null; then
         echo "$DATA_DIR is mounted read-write"
         exit 0
     fi
     if systemctl is-active -q docker.socket || systemctl is-active -q docker.service; then
         systemctl stop docker.socket docker.service
-        echo "$DATA_DIR is not writable - stopped Docker. Repair with fsck and remount; Docker then comes back on its own."
+        echo "$DATA_DIR is not writable - stopped Docker. Repair with fsck, remount, then: systemctl start docker"
     else
         echo "$DATA_DIR is not writable"
     fi

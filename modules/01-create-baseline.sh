@@ -1,85 +1,55 @@
 #!/usr/bin/env bash
-# Capture the baseline: a copy of this system exactly as it came off the SD
-# card image, onto p3/p4, plus the autoboot.txt that lets us tryboot into it.
+# Capture the baseline: a copy of this system exactly as it was installed,
+# onto rootB, made bootable from its own ESP-B and given its own NVRAM boot
+# entry, which homelab-reset reaches through BootNext.
 #
 # Runs FIRST, before any module that changes the system, so the baseline is the
-# pristine flashed OS - no /data mount, no apt upgrade, no Docker, no services.
+# pristine install - no /data mount, no apt upgrade, no Docker, no services.
 # Captured exactly once. The baseline only ever boots, overwrites the main
-# image and reboots, so nothing here goes further than making it bootable.
+# system and reboots, so nothing here goes further than making it bootable.
 #
-#   autoboot.txt (on bootA, p1)
-#       [all]     tryboot_a_b=1   boot_partition=1   -> normal boot, bootA
-#       [tryboot]                 boot_partition=3   -> baseline boot, bootB
+#   ESP-A (p1) stub -> rootA's /boot/grub   entry "homelab", in BootOrder
+#   ESP-B (p3) stub -> rootB's /boot/grub   entry "homelab-baseline", not in
+#                                           BootOrder, booted only via BootNext
 #
-# tryboot_a_b=1 makes the firmware read the ordinary config.txt from whichever
-# partition it landed on, so kernel, overlays and cmdline all come from bootB.
-# See AGENTS.md for why the switch happens at the partition level.
+# BootNext is one-shot: the firmware clears it before trying the entry, so a
+# power cut or a baseline that fails to start lands back on BootOrder.
 set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
 
 need_root
-need_cmd rsync
+need_cmd rsync efibootmgr chroot
 detect_disk
-[[ -b "$DEV_BOOT_B" && -b "$DEV_ROOT_B" ]] \
-    || die "p3/p4 do not exist - 00-storage.sh should have created them"
 
-mkdir -p "$BASELINE_BOOT_MNT" "$BASELINE_ROOT_MNT"
-mountpoint -q "$BASELINE_BOOT_MNT" || mount "$DEV_BOOT_B" "$BASELINE_BOOT_MNT"
+mkdir -p "$BASELINE_ROOT_MNT"
 mountpoint -q "$BASELINE_ROOT_MNT" || mount "$DEV_ROOT_B" "$BASELINE_ROOT_MNT"
 
-# ---------- boot partition ----------
-if [[ -f "$BASELINE_BOOT_MNT/config.txt" ]]; then
-    skip "bootB already populated"
-else
-    log "copying boot partition to bootB"
-    # autoboot.txt is excluded: it is only ever read from the first FAT
-    # partition, and a stale copy here would only cause confusion.
-    rsync -a --exclude=autoboot.txt --exclude="$ARM_NAME" \
-        --exclude='homelab-reset.log*' \
-        "$BOOT_DIR/" "$BASELINE_BOOT_MNT/"
-
-    set_cmdline_root "$BASELINE_BOOT_MNT/cmdline.txt" "$PART_ROOT_B"
-    ok "bootB points at rootB"
-fi
-
-# ---------- autoboot.txt on the live boot partition ----------
-if [[ -f "$BOOT_DIR/autoboot.txt" ]]; then
-    skip "autoboot.txt present"
-else
-    cat > "$BOOT_DIR/autoboot.txt" <<EOF
-[all]
-tryboot_a_b=1
-boot_partition=${PART_BOOT_A}
-
-[tryboot]
-boot_partition=${PART_BOOT_B}
-EOF
-    ok "wrote autoboot.txt"
-fi
-
 # ---------- the baseline itself ----------
-# Guarded on the stamp rather than the role file, which is written earlier: a
+# Guarded on the stamp rather than the role file, which is written later: a
 # clone interrupted midway should be finished by the next install.sh run, not
 # skipped as if it were complete.
 if [[ -f "$BASELINE_ROOT_MNT$BASELINE_STAMP" ]]; then
     skip "baseline captured $(cat "$BASELINE_ROOT_MNT$BASELINE_STAMP")"
 else
     log "capturing baseline to rootB - this takes a few minutes"
-    # --delete so a recapture onto a used rootB leaves the flashed system and
-    # nothing else. On a first capture rootB is empty and it does nothing.
+    # --delete so a recapture onto a used rootB leaves the installed system
+    # and nothing else. On a first capture rootB is empty and it does nothing.
     rsync_live -aAXH --delete --info=progress2 "${RSYNC_EXCLUDES[@]}" / "$BASELINE_ROOT_MNT/"
     make_runtime_dirs "$BASELINE_ROOT_MNT"
-
-    # Point the clone at ITS OWN partitions. If it mounted bootA instead, a
-    # kernel upgrade there would overwrite the live system's kernel.
-    retarget_fstab "$BASELINE_ROOT_MNT/etc/fstab" "$PART_BOOT_B" "$PART_ROOT_B"
-
     date -Is > "$BASELINE_ROOT_MNT$BASELINE_STAMP"
     ok "baseline captured"
 fi
 
-# Outside the guard, so re-running install.sh picks up repo changes to the
-# reset script and its unit without recapturing the baseline.
+# Everything below is outside the guard, so re-running install.sh picks up
+# repo changes without recapturing the baseline.
+
+# Point the clone at ITS OWN partitions. If it mounted ESP-A instead, a GRUB
+# upgrade there would point the live system's stub at rootB.
+if retarget_fstab "$BASELINE_ROOT_MNT/etc/fstab" "$DEV_ESP_B" "$DEV_ROOT_B"; then
+    ok "baseline fstab points at ESP-B and rootB"
+else
+    skip "baseline fstab points at ESP-B and rootB"
+fi
 
 # Gate 1 of the reset, and what stops install.sh provisioning from here.
 echo baseline > "$BASELINE_ROOT_MNT$ROLE_FILE"
@@ -93,6 +63,50 @@ ln -sfn /etc/systemd/system/homelab-reset-main.service \
     "$BASELINE_ROOT_MNT/etc/systemd/system/multi-user.target.wants/homelab-reset-main.service"
 ok "reset service installed into the baseline"
 
+# ---------- bootloader on ESP-B ----------
+# Done once both halves name rootB: its grub.cfg (copied from rootA by the
+# capture, so it starts out naming rootA) and the stub on ESP-B.
+root_b_uuid=$(uuid_of "$DEV_ROOT_B")
+esp_mnt="$BASELINE_ROOT_MNT$ESP_DIR"
+mountpoint -q "$esp_mnt" || mount "$DEV_ESP_B" "$esp_mnt"
+if grep -qs "root=UUID=$root_b_uuid" "$BASELINE_ROOT_MNT/boot/grub/grub.cfg" \
+    && grep -qs "$root_b_uuid" "$esp_mnt/EFI/debian/grub.cfg"; then
+    umount "$esp_mnt"
+    skip "ESP-B boots rootB"
+else
+    log "installing shim and GRUB onto ESP-B"
+    install_bootloader "$BASELINE_ROOT_MNT" "$DEV_ESP_B"
+    ok "ESP-B boots rootB"
+fi
+
+# ---------- NVRAM boot entry ----------
+# -C creates the entry WITHOUT adding it to BootOrder, so there is no moment
+# at which an ordinary reboot would land in the baseline.
+mapfile -t entries < <(boot_entries_for "$BASELINE_LABEL")
+if (( ${#entries[@]} > 1 )); then
+    die "more than one '$BASELINE_LABEL' boot entry (${entries[*]}) - delete the extras with efibootmgr -b <num> -B"
+elif (( ${#entries[@]} == 1 )); then
+    skip "boot entry $BASELINE_LABEL is Boot${entries[0]}"
+else
+    efibootmgr -C --disk "$DISK" --part "$PART_ESP_B" \
+        --label "$BASELINE_LABEL" --loader '\EFI\debian\shimx64.efi' >/dev/null
+    mapfile -t entries < <(boot_entries_for "$BASELINE_LABEL")
+    (( ${#entries[@]} == 1 )) || die "efibootmgr did not create the $BASELINE_LABEL entry"
+    ok "created boot entry $BASELINE_LABEL as Boot${entries[0]}"
+fi
+
+# The firmware appends entries to BootOrder by itself, so check every run.
+# Not a safety gate (that is BootCurrent, in reset-main.sh) - it keeps an
+# ordinary fall-through boot from landing in the baseline.
+order=$(efibootmgr | sed -n 's/^BootOrder: //p')
+new_order=$(tr ',' '\n' <<<"$order" | grep -vix "${entries[0]}" | paste -sd, || true)
+if [[ "$new_order" == "$order" ]]; then
+    skip "$BASELINE_LABEL is not in BootOrder"
+else
+    [[ -n "$new_order" ]] || die "BootOrder would be empty without $BASELINE_LABEL - fix it by hand"
+    efibootmgr -o "$new_order" >/dev/null
+    ok "removed $BASELINE_LABEL from BootOrder ($new_order)"
+fi
+
 sync
 umount "$BASELINE_ROOT_MNT" || warn "could not unmount $BASELINE_ROOT_MNT"
-umount "$BASELINE_BOOT_MNT" || warn "could not unmount $BASELINE_BOOT_MNT"

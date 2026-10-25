@@ -45,9 +45,8 @@ services:
       TZ: Europe/Berlin
       ACTUAL_HTTPS_KEY: /certs/key.pem
       ACTUAL_HTTPS_CERT: /certs/cert.pem
-    # Keeps Actual from growing at Home Assistant's expense on a 2GB Pi -
-    # enforceable only because modules/10-cgroups.sh enabled the memory
-    # controller.
+    # Keeps Actual from growing at Home Assistant's expense - enforceable
+    # because the kernel has the cgroup memory controller on.
     mem_limit: 512m
     # Docker only knows a container is up, not that the service inside it
     # works. otbr-agent crash-looped for 18 days behind its image's own

@@ -7,52 +7,52 @@ inside a single file. `README.md` is the setup and day-to-day guide.
 
 ## What we're trying to achieve
 
-Reproducible, script-driven provisioning for a Raspberry Pi homelab, plus a
-self-hosted "reset button": a wipe-and-rebuild that puts back a pristine copy
-of the flashed OS so the repo can re-provision from a clean slate - no second
-computer, no prepared media, no physical access beyond a reboot. It is a
-wiping tool first; getting out of a bad state is a side effect. A rescue stick
-is therefore no substitute for it, because the whole value is that nothing has
-to be prepared.
+Reproducible, script-driven provisioning for a homelab on a Fujitsu ESPRIMO
+Q556/2 (x86, UEFI, headless), plus a self-hosted "reset button": a
+wipe-and-rebuild that puts back a pristine copy of the installed OS so the
+repo can re-provision from a clean slate - no second computer, no prepared
+media, no physical access beyond a reboot. It is a wiping tool first; getting
+out of a bad state is a side effect. A rescue stick is therefore no substitute
+for it, because the whole value is that nothing has to be prepared.
 
 The design rests on one decision: **`install.sh` is the only thing that defines
 the desired state.** Everything it builds is disposable, because it can be
 rebuilt. So there is one path back to a known system, from any state:
 
 ```
-any state  -> homelab-reset -> pristine baseline -> install.sh -> working homelab
-fresh card                  -> pristine baseline -> install.sh -> working homelab
+any state     -> homelab-reset -> pristine baseline -> install.sh -> working homelab
+fresh install                  -> pristine baseline -> install.sh -> working homelab
 ```
 
 Those two rows must stay interchangeable. Anything that makes a reset system
-differ from a freshly flashed one is a bug.
+differ from a fresh install is a bug.
 
 Two mechanisms make it work:
 
 1. **Convergent provisioning.** `install.sh` runs small idempotent modules in
    lexicographic order. Each either does its job or no-ops, so re-running after
    adding a module only does the new work.
-2. **A baseline on its own partitions**, carved out of unallocated space at the
-   end of the SD card and reached through the firmware's `tryboot` mechanism.
-   Its own boot partition means a kernel upgrade on the live system can never
-   disturb it.
+2. **A baseline on its own partitions** (its own ESP and root), reached
+   through UEFI's one-shot `BootNext`. Because each root carries its own
+   `/boot` and each ESP's stub names only its own root, a kernel or GRUB
+   upgrade on the live system can never disturb it.
 
-Service state (Paperless documents, databases) lives on a **separate external
-disk**, so a reset never touches it.
+Service state (Paperless documents, databases) lives on a **separate data
+partition**, so a reset never touches it.
 
 ## The baseline
 
-A copy of the system **exactly as it came off the SD card image**, captured
-once by `01-create-baseline.sh` before any other module runs, then left alone.
-No `/data` mount, no apt upgrade, no Docker, no services. Because it is never
+A copy of the system **exactly as it was installed**, captured once by
+`01-create-baseline.sh` before any other module runs, then left alone. No
+`/data` mount, no apt upgrade, no Docker, no services. Because it is never
 refreshed it cannot drift, and cannot accumulate whatever you are resetting to
 escape.
 
 Worth knowing:
 
-- A reset removes everything - packages, containers, config under `/opt`.
-  `install.sh` puts it back, which is why anything you want to survive has to
-  live in `install.sh` or on `/data`.
+- A reset removes everything on rootA - packages, containers, config under
+  `/opt`, and every home directory. `install.sh` puts the system back, which is
+  why anything you want to survive has to live in `install.sh` or on `/data`.
 - The baseline ages: it is never apt-upgraded. `03-upgrade.sh` runs on every
   `install.sh`, so the system you land on is current regardless. After a Debian
   major release upgrade, recapture it - see `README.md`.
@@ -61,47 +61,44 @@ Worth knowing:
 
 ## How it's wired together
 
-### Partition layout (MBR, four primaries, no extended container)
+### Partition layout (GPT, one SSD)
 
 ```
-p1  FAT32  bootA   live system's boot partition, holds autoboot.txt
-p2  ext4   rootA   live system
-p3  FAT32  bootB   baseline's OWN boot partition
-p4  ext4   rootB   baseline
+p1  ESP-A    512M  vfat   live system's EFI: shim, GRUB, stub grub.cfg -> rootA
+p2  rootA     60G  ext4   live system, carries its own /boot
+p3  ESP-B    512M  vfat   baseline's OWN EFI: stub grub.cfg -> rootB
+p4  rootB     20G  ext4   baseline, carries its own /boot
+p5  swap       4G  swap   outside both roots, so no rsync ever sees it
+p6  data     rest  ext4   /data
 ```
 
-Plus a separate USB disk at `/data`. Putting `/data` on its own disk is what
-frees the fourth MBR slot for rootB, and it keeps service data out of the reset
-scope entirely.
+The names are the GPT partition labels; `00-storage.sh` checks them. The
+partitioning itself is done once, by hand, at install time - see `README.md`.
 
-Each system mounts *its own* boot partition at `/boot/firmware`. That is the
-whole point of the layout: a kernel upgrade on one cannot touch the other's
-kernel, overlays or cmdline.
+Each system mounts *its own* ESP at `/boot/efi`, and `/boot` is a plain
+directory inside each root, never a partition of its own. Debian's ESP stub
+does `search.fs_uuid <root-uuid>` and then loads that root's
+`/boot/grub/grub.cfg`, so one UUID per ESP is the whole binding.
 
-`p3`/`p4` are carved from unallocated space at the end of the card, which is
-why the card must **not** auto-expand `p2` on first boot - a mounted ext4
-filesystem cannot be shrunk, so this has to be handled before the first boot,
-not fixed up after. See `README.md`, "Before first boot".
+Both ESPs use the directory `\EFI\debian\`: Debian's signed GRUB has that
+prefix built in, so any other bootloader-id leaves it unable to find its stub.
+The two NVRAM entries are told apart by label instead - `homelab` for the
+live system, `homelab-baseline` for the baseline.
 
-### tryboot / autoboot.txt
+The internal HDD is not part of this layout.
 
-`autoboot.txt` (on bootA) drives the switch between live and baseline:
+### BootNext
 
-```
-[all]
-tryboot_a_b=1
-boot_partition=1
+`BootNext` is a UEFI variable naming one boot entry for the next boot only.
+The firmware clears it before attempting that boot, so an ordinary reboot or
+a power cut always lands back on `BootOrder` with no action needed - that's
+the fail-safe the whole design leans on. Confirmed on this board.
 
-[tryboot]
-boot_partition=3
-```
-
-`tryboot_a_b=1` makes the firmware read the ordinary `config.txt` from
-whichever partition it lands on, so the switch happens at the *partition*
-level rather than by swapping individual files. The tryboot flag is one-shot
-and cannot be set by a cold boot, so an ordinary reboot or a power cut always
-lands back on bootA with no action needed - that's the fail-safe the whole
-design leans on.
+The baseline's entry is created with `efibootmgr -C`, which leaves it out of
+`BootOrder`. This firmware edits NVRAM on its own, though - it has been seen
+adding entries to `BootOrder` and creating extra `debian` entries pointing
+straight at `grubx64.efi` - so `01-create-baseline.sh` re-checks `BootOrder`
+on every run, and the reset never relies on it (see "Reset gates").
 
 The reset boots into the baseline because you cannot rsync over the
 filesystem you are running from. That is the only reason the baseline needs to
@@ -112,19 +109,14 @@ be bootable.
 | Path | Role |
 | --- | --- |
 | `install.sh` | Entry point: symlinks `bin/` into `/usr/local/sbin`, then runs `modules/*.sh` in order. |
-| `lib/common.sh` | Sourced by everything, including `reset-main.sh` inside the baseline. Output helpers, guards, layout constants, copy and cmdline primitives. |
-| `modules/00-storage.sh` | Carves `p3`/`p4` out of unallocated space. |
-| `modules/01-create-baseline.sh` | Captures the baseline onto `p3`/`p4`, once; writes `autoboot.txt`. |
-| `modules/02-data.sh` | Mounts the external disk at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted and writable; recovers on its own (remount + `Upholds=`) if the disk drops out mid-session. Deliberately disables the boot-time fsck (passno `0`) and puts `errors=remount-ro` in the superblock instead; the module's own header explains why. |
+| `lib/common.sh` | Sourced by everything, including `reset-main.sh` inside the baseline. Output helpers, guards, layout constants, boot-entry lookups, copy, fstab and bootloader primitives. |
+| `modules/00-storage.sh` | Verifies the six-partition layout and that the live system runs from rootA and ESP-A. Changes nothing. |
+| `modules/01-create-baseline.sh` | Captures the baseline onto rootB, once; makes ESP-B boot it; creates the `homelab-baseline` NVRAM entry and keeps it out of `BootOrder`. |
+| `modules/02-data.sh` | Mounts p6 at `/data` by UUID; makes Docker refuse to start unless it is genuinely mounted and writable. Boot-checked in fsck's preen mode (passno `2`), and `errors=remount-ro` in the superblock; the module's own header explains why. |
 | `modules/03-upgrade.sh` | `apt-get update && upgrade`. |
-| `modules/04-journal.sh` | Keeps the journal on disk. RPi OS defaults it to RAM, so a power cut erases the logs explaining the power cut. Capped at 200M. |
-| `modules/05-arp.sh` | Stops ARP flux on this dual-homed host: each NIC answers only for its own address. Matters because the Pi is dialled into by address. |
-| `modules/06-mdns.sh` | Masks avahi. The Pi is named by the router's DNS (`raspberrypi.fritz.box`) instead of mDNS `.local`; containers keep their own mDNS. |
-| `modules/08-psi.sh` | Puts `psi=1` on the kernel cmdline. RPi OS compiles Pressure Stall Information in but leaves it off, so `/proc/pressure` is absent and Home Assistant's pressure sensors stay empty. Next reboot. |
-| `modules/09-headless.sh` | Returns the GPU's firmware memory reservation (76MB -> 16MB) and stops camera/display probing. Needs a reboot. |
-| `modules/10-cgroups.sh` | Puts `cgroup_enable=memory` on the kernel cmdline, so containers can be given memory limits. Takes effect at the next reboot. |
+| `modules/06-mdns.sh` | Masks avahi. The host is named by the router's DNS (`<host>.fritz.box`) instead of mDNS `.local`; containers keep their own mDNS. |
 | `modules/11-docker.sh` | Docker Engine + Compose plugin from Debian's repos. Owns `/etc/docker/daemon.json`, which caps every container's log at 10MB x 3. |
-| `modules/12-claude-code.sh` | Claude Code, installed into `$SUDO_USER`'s home, plus `claude-remote.service`: a tmux session with Remote Control enabled, started at boot so the Pi can be driven from a phone. Costs ~285MB of RAM. |
+| `modules/12-claude-code.sh` | Claude Code, installed into `$SUDO_USER`'s home, plus `claude-remote.service`: a tmux session with Remote Control enabled, started at boot so the machine can be driven from a phone. |
 | `modules/13-monit.sh` | Monit: stops Docker on a read-only `/data`, stops crash-looping containers, watches kernel memory, RAM, disk, temperature, the age of the last successful backup, and any container Docker reports unhealthy; alerts via ntfy. Plus a healthchecks.io ping every 5 min. Topic and ping URL live in `/data/homelab/notify.env`, outside the repo. |
 | `modules/20-paperless.sh` | Paperless-ngx, and the template the other service modules follow. |
 | `modules/21-home-assistant.sh` | Home Assistant Container - host networking, config on `/data`. |
@@ -134,11 +126,11 @@ be bootable.
 | `modules/25-backup.sh` | Nightly encrypted off-site backup of `/data` with restic over rclone (Google Drive). Installs the timer; stays off until `/data/homelab/rclone.conf` exists. |
 | `bin/homelab-check` | The checks Monit runs. |
 | `bin/homelab-backup` | The nightly backup: `VACUUM INTO` every database on `/data`, then restic. Run by `homelab-backup.timer`. |
-| `bin/homelab-forget-data-disk` | Removes the `/data` fstab line, so the next `install.sh` asks for a new disk. Only for replacing the data disk. |
+| `bin/homelab-forget-data-disk` | Removes the `/data` fstab line, so the next `install.sh` mounts p6 afresh. Only after reformatting the data partition. |
 | `bin/homelab-notify` | Sends an ntfy push; used by Monit, usable by hand. |
-| `bin/homelab-reset` | Arms the reset and triggers a tryboot. |
-| `bin/homelab-status` | Read-only snapshot: role, tryboot, partitions, `/data`, baseline age, armed? |
-| `reset/reset-main.sh` | Installed into the baseline as `/usr/local/sbin/homelab-reset-main`. Overwrites `p1`/`p2` with itself, behind three gates. |
+| `bin/homelab-reset` | Arms the reset and reboots into the baseline via `BootNext`. |
+| `bin/homelab-status` | Read-only snapshot: role, boot variables, baseline entry, partitions, `/data`, baseline age, armed? |
+| `reset/reset-main.sh` | Installed into the baseline as `/usr/local/sbin/homelab-reset-main`. Overwrites rootA with itself and makes it bootable again, behind three gates. |
 | `reset/homelab-reset-main.service` | Runs `reset-main.sh` at boot on the baseline. |
 
 **Module numbering is load-bearing.** `01-create-baseline.sh` captures the
@@ -152,29 +144,39 @@ on `/data` instead.
 unless all three hold:
 
 1. `/etc/homelab-role` says `baseline` - we are not the live system
-2. this boot came via tryboot - it was deliberate
-3. the arm marker exists on bootB - a reset was actually requested
+2. `BootCurrent` is the `homelab-baseline` entry - it was deliberate, not the
+   firmware falling through to the baseline after the live entry failed
+3. the arm marker exists on ESP-B - a reset was actually requested
 
-`homelab-reset` sets up all three. The marker lives on **bootB**, not bootA:
-each system mounts its own boot partition, so a marker on bootA would be
-invisible to the baseline, and `arm_reset()` in `lib/common.sh` mounts bootB
-explicitly to place it.
+`homelab-reset` sets up gates 2 and 3. The marker lives on **ESP-B**, not
+ESP-A: each system mounts its own ESP, so a marker on ESP-A would be invisible
+to the baseline, and `arm_reset()` in `lib/common.sh` mounts ESP-B explicitly
+to place it. The marker is the gate that actually holds.
 
 ### The capture/reset pair
 
-`01-create-baseline.sh` makes three changes to the clone: retarget its fstab at
-p3/p4, write `baseline` to the role file, and install the reset machinery.
-`reset/reset-main.sh` undoes exactly those on the way back, plus the cmdline.
-**Change one and check the other** - an edit with no inverse is silently
-inherited by the live system after a reset.
+`01-create-baseline.sh` makes four changes to the clone: retarget its fstab at
+ESP-B/rootB, regenerate its `grub.cfg` for rootB (with GRUB on ESP-B), write
+`baseline` to the role file, and install the reset machinery.
+`reset/reset-main.sh` undoes exactly those on the way back. **Change one and
+check the other** - an edit with no inverse is silently inherited by the live
+system after a reset.
 
-That list is also the complete set of ways the baseline differs from a freshly
-flashed card, which is why it is worth keeping short.
+ESP-A needs nothing on the way back: the reset rsyncs into the existing rootA
+filesystem, which keeps its UUID, so ESP-A's stub still points at it. The
+reset regenerates rootA's `grub.cfg` in a chroot rather than patching UUIDs
+with sed, because a patch that misses after a GRUB update leaves an unbootable
+live system - the worst failure this repo can have. Every `grub-install` runs
+with `--no-nvram`: NVRAM is changed only by `01-create-baseline.sh`.
+
+That list is also the complete set of ways the baseline differs from a fresh
+install, which is why it is worth keeping short.
 
 ## Current status
 
-Everything above is implemented, and the full cycle - install, reset, reinstall
-- has been exercised on real hardware.
+The boot and storage layer has been ported from the Raspberry Pi to this
+machine and the baseline is in place, but a reset has **not** yet been
+exercised here. `MIGRATION.md` tracks what is left.
 
 ## Things to watch for when extending this
 
@@ -195,17 +197,15 @@ Everything above is implemented, and the full cycle - install, reset, reinstall
   `$` in one - including in a YAML comment - is expanded by the shell before
   it reaches the file.
 - A module that runs a service outside Docker (not the `20-paperless.sh`
-  pattern) and needs `/data` present to start must add its unit to the
-  `Upholds=docker.service` line in `modules/02-data.sh`, or it won't come
-  back on its own after a transient USB drop of the data disk. Docker-based
-  modules don't need this - Docker restarts its own containers once it's
-  back up.
+  pattern) and needs `/data` present to start must give its unit
+  `RequiresMountsFor=/data`, the same guard `modules/02-data.sh` gives Docker.
+  Docker-based modules don't need this.
 - Never regenerate a secret that already exists on disk - that orphans whatever
   data was encrypted or keyed with the old one. `RESTIC_PASSWORD` is the worst
   case: it is the only thing that can decrypt the backups, and it needs a copy
-  somewhere that is not this Pi at all.
+  somewhere that is not this machine at all.
 - Keep the baseline minimal. Every addition is a way a reset system can
-  differ from a freshly flashed one.
+  differ from a fresh install.
 - `reset-main.sh` runs from a copy of `lib/common.sh` installed at
   `/usr/local/lib/homelab/common.sh`. A new `common.sh` helper that assumes it
   is running on the live system will break the reset side.

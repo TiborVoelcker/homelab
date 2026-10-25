@@ -1,92 +1,58 @@
 #!/usr/bin/env bash
-# Mount the external USB disk at /data, and make Docker refuse to start without
-# it. If the disk is absent but Docker starts anyway, bind mounts CREATE empty
-# directories under /data and services initialise fresh state onto the SD card
-# while the real data sits on the unmounted disk. Four layers stop that, and
-# recover if the disk drops off USB mid-session (a hotplug event elsewhere on
-# the bus, e.g. the Matter/Thread radio, can reset the whole controller and
-# knock this disk offline for a second):
-#   nofail            -> the Pi still boots without the disk, so you can SSH in
+# Mount the data partition (p6) at /data, and make Docker refuse to start
+# without it. If /data is not mounted but Docker starts anyway, bind mounts
+# CREATE empty directories under /data and services initialise fresh state
+# onto rootA while the real data sits on the unmounted partition - which a
+# reset would then wipe. Three layers stop that:
+#   nofail            -> the system still boots without /data, so you can SSH in
 #   RequiresMountsFor -> Docker will not start until /data is genuinely mounted
-#   marker file       -> catches "mounted, but it is the wrong disk"
+#   marker file       -> catches "mounted, but it is the wrong filesystem"
 #                        (and Docker also refuses a read-only /data)
-#   udev + Upholds=   -> remounts the disk and restarts Docker on its own if
-#                        the disk ever drops out and comes back
 #
 # Error behaviour is set on the filesystem itself rather than as a mount
-# option, so it holds however this disk gets mounted - see the note on
-# tune2fs -e below. Together with Monit's `data` check it is the whole of the
-# corruption defence: nothing checks or repairs this filesystem at boot - see
-# the note on the fstab line for why.
+# option, so it holds however this partition gets mounted - see the note on
+# tune2fs -e below. The boot-time check is fsck's preen mode, which only makes
+# repairs that are safe without a human - see the note on the fstab line.
 set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
 
 need_root
-need_cmd lsblk blkid findmnt sfdisk systemd-escape tune2fs
+need_cmd blkid findmnt tune2fs
 detect_disk
 
 mkdir -p "$DATA_DIR"
 
-# ---------- is the configured disk attached? ----------
-# A missing disk may have been replaced or may just be unplugged, and only a
-# human can tell which - so stop rather than guess.
+# ---------- is the configured filesystem still there? ----------
+# A different UUID means p6 was reformatted, and only a human can tell whether
+# its content was copied across first - so stop rather than guess.
 uuid=$(awk -v d="$DATA_DIR" \
     '$1 ~ /^UUID=/ && $2 == d { sub(/^UUID=/, "", $1); print $1; exit }' /etc/fstab)
 if [[ -n "$uuid" && ! -e "/dev/disk/by-uuid/$uuid" ]]; then
-    die "fstab mounts $DATA_DIR from UUID=$uuid, which is not attached - plug it in, or if you replaced it: sudo homelab-forget-data-disk"
+    die "fstab mounts $DATA_DIR from UUID=$uuid, which does not exist - if you reformatted $DEV_DATA: sudo homelab-forget-data-disk"
 fi
 
 # ---------- already configured? ----------
 if grep -q "[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab; then
     skip "fstab already has $DATA_DIR"
 else
-    # Candidates: block devices that are not the SD card we booted from.
-    mapfile -t candidates < <(
-        lsblk -rno NAME,TYPE,SIZE,FSTYPE,LABEL \
-            | awk '$2=="part"{print $1, $3, $4, $5}' \
-            | grep -v "^$(basename "$DISK")"
-    )
+    # This script never formats anything. ext4 is required: container volumes
+    # need Unix ownership.
+    fstype=$(blkid -o value -s TYPE "$DEV_DATA" || echo "")
+    [[ "$fstype" == "ext4" ]] \
+        || die "$DEV_DATA is '${fstype:-unformatted}', expected ext4 - format it with: sudo mkfs.ext4 -e remount-ro -L homelab-data $DEV_DATA"
+    data_uuid=$(uuid_of "$DEV_DATA")
 
-    if [[ -n "${HOMELAB_DATA_UUID:-}" ]]; then
-        data_uuid="$HOMELAB_DATA_UUID"
-    else
-        [[ ${#candidates[@]} -gt 0 ]] \
-            || die "no external partitions found - plug in the data disk and re-run"
-
-        log "external partitions found:"
-        for i in "${!candidates[@]}"; do
-            log "$(printf '  [%d] %s' "$i" "${candidates[$i]}")"
-        done
-        echo
-        log "Pick the partition to mount at $DATA_DIR."
-        log "This script never formats anything - format it yourself first with:"
-        log "    sudo mkfs.ext4 -e remount-ro -L homelab-data /dev/sdXN"
-        log "ext4 is required; exFAT and NTFS cannot store Unix ownership,"
-        log "which container volumes need."
-        echo
-        read -rp "      index: " idx
-        [[ "$idx" =~ ^[0-9]+$ && -n "${candidates[$idx]:-}" ]] || die "invalid selection"
-
-        dev="/dev/$(echo "${candidates[$idx]}" | awk '{print $1}')"
-        fstype=$(blkid -o value -s TYPE "$dev" || echo "")
-        [[ "$fstype" == "ext4" ]] || die "$dev is '${fstype:-unformatted}', expected ext4"
-
-        data_uuid=$(blkid -o value -s UUID "$dev")
-        [[ -n "$data_uuid" ]] || die "could not read UUID of $dev"
-    fi
-
-    # UUID, never /dev/sdX - device letters shift with enumeration order.
+    # UUID, never /dev/nvme0n1p6 - device names can shift between boots.
     #
-    # The final 0 (passno) means no fsck at boot. The stock Raspberry Pi
-    # cmdline carries fsck.repair=yes, so a boot check runs as `e2fsck -y`:
-    # yes to every repair, with nobody watching. On a filesystem that is
-    # already damaged that can destroy more than the fault - on 2026-10-17 it
-    # erased this disk's directory tree. Detection is left to errors=remount-ro
-    # below and Monit's `data` check, which only ever report. To check by hand,
-    # unmount and run `e2fsck -fn /dev/sdXN`: -n reports without writing.
-    # fsck.repair=yes itself stays, because it also governs the root
-    # filesystem, which does want unattended repair on a headless Pi.
-    printf 'UUID=%s %s ext4 defaults,noatime,nofail,x-systemd.device-timeout=30 0 0\n' \
+    # passno 2: checked at boot after root, in fsck's default preen mode,
+    # which makes only the repairs that are safe without a human and refuses
+    # the rest. Never put fsck.repair=yes on the kernel cmdline: that turns
+    # every boot check into `e2fsck -y`, yes to every repair with nobody
+    # watching, and on 2026-10-17 it erased the old data disk's directory
+    # tree. Damage preen refuses leaves /data unmounted (nofail), Docker down
+    # (the drop-in below) and Monit alerting. To check by hand, unmount and
+    # run `e2fsck -fn` on the partition: -n reports without writing.
+    printf 'UUID=%s %s ext4 defaults,noatime,nofail,x-systemd.device-timeout=30 0 2\n' \
         "$data_uuid" "$DATA_DIR" >> /etc/fstab
 
     systemctl daemon-reload
@@ -100,9 +66,6 @@ ok "$DATA_DIR mounted from $(findmnt -no SOURCE "$DATA_DIR")"
 findmnt -O rw "$DATA_DIR" >/dev/null \
     || die "$DATA_DIR is read-only - unmount it, repair with e2fsck, then re-run"
 
-data_uuid=$(findmnt -no UUID "$DATA_DIR")
-mount_unit=$(systemd-escape --path --suffix=mount "$DATA_DIR")
-
 [[ -f "$DATA_MARKER" ]] || { touch "$DATA_MARKER"; ok "wrote data marker"; }
 
 data_dev=$(findmnt -no SOURCE "$DATA_DIR")
@@ -112,7 +75,7 @@ data_dev=$(findmnt -no SOURCE "$DATA_DIR")
 # failing disk goes on corrupting itself quietly. remount-ro flips it read-only
 # on the first error, which stops the damage and is what Monit's `data` check
 # notices. Set in the superblock rather than fstab, so it holds for every mount
-# of this disk, not just this fstab line.
+# of this filesystem, not just this fstab line.
 if tune2fs -l "$data_dev" | grep -qi '^Errors behavior:[[:space:]]*Remount read-only'; then
     skip "$DATA_DIR already goes read-only on error"
 else
@@ -127,17 +90,17 @@ ok "running mount goes read-only on error"
 
 # ---------- make Docker depend on the mount ----------
 # The rw check matters because a read-only /data is still a mounted /data:
-# without it, Upholds= below would restart Docker straight after Monit stopped
-# it (see bin/homelab-check data), and the containers would crash-loop again.
+# without it, a restart of Docker after Monit stopped it (see bin/homelab-check
+# data) would bring the containers back to crash-loop again.
 DROPIN=/etc/systemd/system/docker.service.d/10-homelab-data.conf
-dropin=$(cat <<EOF
+dropin=$(cat <<EOT
 [Unit]
 RequiresMountsFor=$DATA_DIR
 
 [Service]
 ExecStartPre=/usr/bin/test -f $DATA_MARKER
 ExecStartPre=/usr/bin/findmnt -O rw $DATA_DIR
-EOF
+EOT
 )
 if [[ "$(cat "$DROPIN" 2>/dev/null)" == "$dropin" ]]; then
     skip "docker mount dependency present"
@@ -146,42 +109,4 @@ else
     printf '%s\n' "$dropin" > "$DROPIN"
     systemctl daemon-reload
     ok "docker will not start unless $DATA_DIR is mounted, verified and writable"
-fi
-
-# ---------- recover on our own if the disk drops off USB ----------
-# When the disk disappears mid-session it loses its block device node
-# entirely; when it reconnects it gets an unrelated new one (sda instead of
-# sdb, say). There is no "resume" at the filesystem level, only a fresh
-# mount - and nothing remounts it automatically, since plain fstab entries
-# are only pulled in once at boot (WantedBy=local-fs.target), not
-# re-triggered when the device reappears later. udev noticing the device
-# come back is the standard, built-in hook for that.
-# Compared by content, not just existence: the rule embeds the disk's UUID, so
-# replacing the data disk leaves a rule that matches a disk which no longer
-# exists and silently stops recovering the new one.
-UDEV_RULE=/etc/udev/rules.d/99-data-recover.rules
-rule="ACTION==\"add\", SUBSYSTEM==\"block\", ENV{ID_FS_UUID}==\"$data_uuid\", RUN+=\"/usr/bin/systemctl --no-block start $mount_unit\""
-if [[ "$(cat "$UDEV_RULE" 2>/dev/null)" == "$rule" ]]; then
-    skip "data-recover udev rule present"
-else
-    printf '%s\n' "$rule" > "$UDEV_RULE"
-    udevadm control --reload-rules
-    ok "udev will remount $DATA_DIR when the disk reappears after a drop"
-fi
-
-# Upholds= is the reverse of RequiresMountsFor=: as long as the mount is
-# active, systemd restarts anything listed here the instant it's found
-# down, no polling. The udev rule above only ever has to know how to get
-# the disk back; anything else that needs /data just gets added to this
-# same line.
-MOUNT_DROPIN_DIR="/etc/systemd/system/${mount_unit}.d"
-MOUNT_DROPIN="$MOUNT_DROPIN_DIR/10-uphold-dependents.conf"
-uphold=$'[Unit]\nUpholds=docker.service'
-if [[ "$(cat "$MOUNT_DROPIN" 2>/dev/null)" == "$uphold" ]]; then
-    skip "mount uphold dependency present"
-else
-    mkdir -p "$MOUNT_DROPIN_DIR"
-    printf '%s\n' "$uphold" > "$MOUNT_DROPIN"
-    systemctl daemon-reload
-    ok "docker will restart automatically whenever $DATA_DIR comes back"
 fi

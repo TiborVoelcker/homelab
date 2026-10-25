@@ -5,14 +5,16 @@ REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$REPO_DIR/lib/common.sh"
 
 need_root
-need_tryboot_support
+need_cmd efibootmgr
 detect_disk
-[[ -b "$DEV_ROOT_B" ]] || die "rootB does not exist - run install.sh first"
-[[ -f "$BOOT_DIR/autoboot.txt" ]] || die "autoboot.txt missing - run install.sh first"
+[[ -b "$DEV_ROOT_B" ]] || die "rootB does not exist - see README.md for the layout"
+mapfile -t entries < <(boot_entries_for "$BASELINE_LABEL")
+(( ${#entries[@]} == 1 )) \
+    || die "expected one '$BASELINE_LABEL' boot entry, found ${#entries[@]} - run install.sh"
 
-# Refuse without a readable stamp. An unpopulated rootB would tryboot into a
+# Refuse without a readable stamp. An unpopulated rootB would boot into a
 # partition with no kernel while leaving the arm marker set - exactly the "you
-# now need another computer" hole this repo exists to close.
+# now need a rescue stick" hole this repo exists to close.
 stamp=""
 mkdir -p "$BASELINE_ROOT_MNT"
 if mount -o ro "$DEV_ROOT_B" "$BASELINE_ROOT_MNT" 2>/dev/null; then
@@ -28,16 +30,20 @@ fi
 
 warn "This ERASES the live system and restores from the baseline image."
 log "baseline captured: $stamp$age"
-log "preserved:         $DATA_DIR (separate disk)"
+log "preserved:         $DATA_DIR (separate partition)"
 log "lost:              every package, service and change since"
 echo
-log "Equivalent to re-flashing the card. Re-run install.sh afterwards"
+log "Equivalent to a fresh install. Re-run install.sh afterwards"
 log "to rebuild the homelab."
 echo
 confirm "Type y to reset" || die "cancelled"
 
 arm_reset || die "could not arm the reset - nothing has been changed"
+# BootNext is one-shot: if the baseline fails to start, the next boot falls
+# back to BootOrder and the live system, untouched.
+efibootmgr -n "${entries[0]}" >/dev/null \
+    || die "could not set BootNext - the reset is armed but nothing will boot into it; reboot normally, the live system is untouched"
 
-ok "armed - rebooting into the baseline"
+ok "armed - rebooting into the baseline (Boot${entries[0]})"
 sleep 2
-exec reboot "0 tryboot"
+exec reboot

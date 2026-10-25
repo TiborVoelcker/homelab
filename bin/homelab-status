@@ -1,29 +1,32 @@
 #!/usr/bin/env bash
-# Read-only snapshot of where things stand. Safe to run on a card that has not
+# Read-only snapshot of where things stand. Safe to run on a disk that has not
 # been provisioned yet - every section degrades to a message rather than an
 # error.
 set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$REPO_DIR/lib/common.sh"
 
-need_root   # sfdisk --disk-id and the baseline mounts both need it
+need_root   # efibootmgr and the baseline mounts both need it
 detect_disk
 
 echo "role            $(current_role)"
-echo "booted tryboot  $(booted_via_tryboot && echo yes || echo no)"
-echo "sd card         $DISK"
+echo "disk            $DISK"
 echo
-lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "$DISK"
+efibootmgr | grep -E '^Boot(Current|Next|Order):' || warn "cannot read the UEFI boot variables"
+entries=$(boot_entries_for "$BASELINE_LABEL" | paste -sd, || true)
+echo "baseline entry  ${entries:-none - run install.sh}"
+echo
+lsblk -o NAME,SIZE,FSTYPE,PARTLABEL,MOUNTPOINT "$DISK"
 echo
 if mountpoint -q "$DATA_DIR"; then
     echo "data            $(findmnt -no SOURCE,SIZE,USE% "$DATA_DIR")"
-    [[ -f "$DATA_MARKER" ]] || warn "data marker MISSING - wrong disk mounted?"
+    [[ -f "$DATA_MARKER" ]] || warn "data marker MISSING - wrong partition mounted?"
 else
-    warn "data disk NOT mounted - docker will refuse to start"
+    warn "data partition NOT mounted - docker will refuse to start"
 fi
 echo
 if [[ ! -b "$DEV_ROOT_B" ]]; then
-    echo "baseline        rootB does not exist - run install.sh"
+    echo "baseline        rootB does not exist - see README.md for the layout"
 else
     mkdir -p "$BASELINE_ROOT_MNT"
     if mount -o ro "$DEV_ROOT_B" "$BASELINE_ROOT_MNT" 2>/dev/null; then
@@ -35,13 +38,13 @@ else
         elif days=$(age_days "$stamp"); then
             echo "baseline        $stamp  ($(human_age "$days"))"
             (( days > BASELINE_STALE_DAYS )) \
-                && warn "baseline is old - recapture it or reflash the card (see README.md)"
+                && warn "baseline is old - recapture it (see README.md)"
         else
             echo "baseline        $stamp"
         fi
     else
         warn "cannot read rootB (already mounted, or not formatted)"
     fi
-    reset_armed && warn "RESET ARMED - next tryboot will wipe the live system"
+    reset_armed && warn "RESET ARMED - the next boot through $BASELINE_LABEL will wipe the live system"
 fi
 exit 0

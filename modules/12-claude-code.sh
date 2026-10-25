@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install Claude Code for the account that ran install.sh, and keep a session
-# of it running with Remote Control enabled, so the Pi can be driven from a
+# of it running with Remote Control enabled, so this machine can be driven from a
 # phone without SSHing in first.
 #
 # The one place in the repo that pipes curl into a shell: there is no Debian
@@ -24,6 +24,10 @@
 #   reboot unattended. If the OAuth token ever fully expires the session will
 #   come up sitting at a login prompt with nobody watching, which is what
 #   remain-on-exit below is for: the window stays so the reason is visible.
+#
+# The very first start in a new home stops at "Trust ~/claude_workspace?
+# [y/N]" with nobody watching: attach, answer y once. The answer is stored
+# in ~/.claude.json, so every later boot connects on its own.
 set -euo pipefail
 source "${REPO_DIR:?}/lib/common.sh"
 
@@ -104,5 +108,4 @@ systemctl enable claude-remote.service >/dev/null 2>&1 \
     && ok "claude code will start with remote control at boot" \
     || warn "could not enable claude-remote.service"
 log "attach locally with: tmux attach -t Claude"
-log "a session costs ~200-320MB of RAM, which is material on this Pi -"
 log "stop it with: sudo systemctl stop claude-remote"

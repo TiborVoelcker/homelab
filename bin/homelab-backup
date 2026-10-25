@@ -14,8 +14,8 @@
 #   transaction and needs nothing stopped. The live files are then excluded.
 #
 #   The snapshots are named *.sqlite-snapshot rather than keeping their own
-#   extension, so the `*.db` and `*.sqlite3` excludes below cannot swallow the
-#   very copies this script just made.
+#   extension, so the `*.db`, `*.sqlite` and `*.sqlite3` excludes below cannot
+#   swallow the very copies this script just made.
 set -euo pipefail
 
 DATA_DIR=/data
@@ -66,7 +66,7 @@ while IFS= read -r db; do
         skipped=1
     fi
 done < <(find "$DATA_DIR" -path "$SNAP_DIR" -prune -o \
-    -type f \( -name '*.db' -o -name '*.sqlite3' \) -print)
+    -type f \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \) -print)
 
 # ---------- the backup itself ----------
 # The live databases are excluded by extension rather than by path, so this
@@ -74,6 +74,7 @@ done < <(find "$DATA_DIR" -path "$SNAP_DIR" -prune -o \
 restic backup "$DATA_DIR" \
     --tag homelab \
     --exclude '*.db'       --exclude '*.db-wal'       --exclude '*.db-shm' \
+    --exclude '*.sqlite'   --exclude '*.sqlite-wal'   --exclude '*.sqlite-shm' \
     --exclude '*.sqlite3'  --exclude '*.sqlite3-wal'  --exclude '*.sqlite3-shm' \
     --exclude "$DATA_DIR/paperless/consume"
 

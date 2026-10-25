@@ -76,8 +76,15 @@ no media".
 only. It is the genuine analogue of `tryboot`, down to the fail-safe: the
 firmware is specified to clear it before attempting that boot, so a power cut
 or a baseline that fails to start lands back on the normal `BootOrder` with no
-action needed. **Confirm on this board** - the documented intent is clear, this
-firmware's actual behaviour is not yet tested.
+action needed. **Confirmed on this board 2026-10-25**: BootNext booted the
+new entry once, and the next reboot went back to `BootOrder`.
+
+**This firmware edits NVRAM on its own.** After that first boot it deleted
+the dead Windows entry, created a second entry for the new ESP
+(`debian`, pointing straight at `grubx64.efi`, not the shim) and appended
+both entries to `BootOrder`. Expect the same for ESP-B. Entries that skip
+the shim cannot start anything with Secure Boot on, but do not rely on an
+entry staying out of `BootOrder` - see "The three gates".
 
 Set and inspected with `efibootmgr`:
 
@@ -134,15 +141,15 @@ partition, so nothing collides) and create the entry by hand with
 | booted via tryboot | the baseline is **absent from `BootOrder`** |
 | arm marker on bootB | arm marker on ESP-B |
 
-The middle gate gets *stronger*, not weaker. On the Pi, "was this a tryboot
-boot" had to be read out of the device tree. Here, if the baseline entry is
-never placed in `BootOrder`, then the only ways to boot it at all are a
-deliberate `BootNext` or someone standing at the machine picking it out of the
-firmware menu. Booting it is inherently deliberate, so the property the gate
-was checking is a consequence of the layout rather than something to test.
+The middle gate is weaker than planned: this firmware adds entries to
+`BootOrder` by itself (see above), so "absent from `BootOrder`" is not
+something the layout guarantees. If the live entry ever fails, the firmware
+may fall through to a baseline entry. Check it instead: UEFI exposes the
+entry this boot came through as `BootCurrent`, and the baseline compares it
+to its own entry - the analogue of reading the tryboot flag on the Pi. A
+fall-through boot then still lands on a baseline that does nothing.
 
-Keep the arm marker anyway. It is what makes booting the baseline by hand safe,
-and it is one `touch`.
+The arm marker is the gate that actually holds, and it is one `touch`.
 
 ### The one genuinely new piece of machinery
 
@@ -361,6 +368,13 @@ efibootmgr -n <other-entry> && reboot      # then check BootCurrent, and that Bo
    HDD still holds `~/docker-compose.env` (Paperless's secret key), the
    `/data` tarball, and Claude's `~/.claude` - carry them over before the HDD
    is reused.
+   **rootB already holds the baseline's content**: on 2026-10-25, with rootA
+   unmounted and `ifupdown` and the debootstrap kernel purged, rootA was
+   copied to rootB (`rsync -aHAXx`) before anything else touched it. The
+   ported `01-create-baseline.sh` must finish that copy - retarget its fstab,
+   role file, reset machinery, GRUB on ESP-B, NVRAM entry - and must **not**
+   recapture from rootA, which by then holds Claude Code and the handover
+   files.
 4. Run "Verify first" and record the answers here.
 5. Clone this repo, then port in dependency order: `lib/common.sh` first, then
    `00-storage` as a verifier, then `02-data`, then the deletions, then
